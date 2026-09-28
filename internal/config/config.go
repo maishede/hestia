@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 )
@@ -21,17 +20,8 @@ type Config struct {
 	Port        int       `json:"port"`
 	Listen      string    `json:"listen"`
 	OpenBrowser bool      `json:"openBrowser"`
-	Tray        *bool     `json:"tray"` // 托盘常驻（nil = Windows 默认开，其他平台默认关）
 	AutoStart   bool      `json:"autoStart"`
 	Libraries   []Library `json:"libraries"`
-}
-
-// UseTray 解析托盘默认值。
-func (c Config) UseTray() bool {
-	if c.Tray != nil {
-		return *c.Tray
-	}
-	return runtime.GOOS == "windows"
 }
 
 func Default() Config {

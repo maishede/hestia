@@ -1,0 +1,116 @@
+/* Hestia 控制台（桌面 GUI）——与手机端同源的浅色设计系统 */
+:root {
+  --bg: #f5f6fa;
+  --card: #ffffff;
+  --line: #e3e6ef;
+  --text: #1c2333;
+  --muted: #7a8199;
+  --accent: #3d6ef2;
+  --danger: #e5484d;
+  --shadow: 0 10px 30px rgba(23, 32, 64, .10);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+input { font: inherit; }
+svg { display: block; }
+
+.wrap { max-width: 560px; margin: 0 auto; padding: 22px 22px 40px; }
+
+header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+header .logo { width: 26px; height: 26px; }
+header .logo path { stroke: var(--accent); stroke-width: 1.6; fill: rgba(61, 110, 242, .16); }
+header h1 { margin: 0; font-size: 19px; font-weight: 700; }
+header h1 span { font-weight: 400; color: var(--muted); }
+
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 18px; margin-bottom: 14px;
+}
+.card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 700; color: var(--muted); letter-spacing: .3px; }
+
+.btn {
+  background: #fff; border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  transition: .15s;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:active { transform: scale(.97); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; min-width: 96px; }
+.btn.primary:hover { color: #fff; filter: brightness(1.08); }
+.btn.danger { color: var(--danger); border-color: rgba(229, 72, 77, .4); padding: 5px 10px; border-radius: 7px; font-size: 12px; }
+.btn.danger:hover { background: rgba(229, 72, 77, .06); border-color: var(--danger); }
+
+/* 状态卡 */
+.row1 { display: flex; align-items: center; gap: 10px; }
+.row1 .btn { margin-left: auto; }
+.dot { width: 10px; height: 10px; border-radius: 99px; background: #b6bccb; flex-shrink: 0; }
+.dot.on { background: #22b573; box-shadow: 0 0 0 4px rgba(34, 181, 115, .15); }
+#stateText { font-weight: 700; }
+.url {
+  margin-top: 10px; padding: 10px 12px; border-radius: 9px;
+  background: var(--bg); font-size: 13.5px; color: var(--accent); font-weight: 600;
+  word-break: break-all;
+}
+.actions { display: flex; gap: 10px; margin-top: 12px; }
+
+/* 媒体库 */
+.addrow { display: flex; gap: 10px; margin-bottom: 12px; }
+.addrow input {
+  flex: 1; background: #fff; border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 12px; outline: none; min-width: 0;
+}
+.addrow input:focus { border-color: var(--accent); }
+.liblist { display: flex; flex-direction: column; gap: 8px; }
+.libitem {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 12px;
+}
+.libitem.off .libmain { opacity: .55; }
+.libdot { width: 8px; height: 8px; border-radius: 99px; background: #22b573; flex-shrink: 0; }
+.libdot.off { background: #b6bccb; }
+.libdot.scan { background: #f5a623; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.libmain { flex: 1; min-width: 0; }
+.libname { font-size: 13.5px; font-weight: 700; }
+.libpath { font-size: 12px; color: var(--muted); word-break: break-all; }
+.libstat { font-size: 12px; color: var(--muted); }
+.foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.muted { color: var(--muted); font-size: 12.5px; }
+.small { font-size: 12px; margin-top: 10px; }
+
+/* 设置 */
+.setrow { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.setrow label:first-child { color: var(--muted); font-size: 13px; font-weight: 600; min-width: 36px; }
+.port {
+  width: 90px; background: #fff; border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 10px; outline: none;
+}
+.port:focus { border-color: var(--accent); }
+
+.switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; cursor: pointer; display: inline-block; }
+.switch input { opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.switch i {
+  position: absolute; inset: 0; border-radius: 99px; background: #d3d8e3;
+  transition: background .18s; pointer-events: none;
+}
+.switch i::after {
+  content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px;
+  border-radius: 99px; background: #fff; transition: left .18s; box-shadow: 0 1px 3px rgba(23, 32, 64, .25);
+}
+.switch input:checked + i { background: var(--accent); }
+.switch input:checked + i::after { left: 21px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  background: #fff; border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 16px; font-size: 13px; box-shadow: var(--shadow);
+  animation: in .2s ease; max-width: 90%;
+}
+.toast.err { border-color: rgba(229, 72, 77, .5); color: var(--danger); }
+@keyframes in { from { opacity: 0; transform: translate(-50%, 10px); } }

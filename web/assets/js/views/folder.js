@@ -67,7 +67,7 @@ export async function FolderView(app, id) {
     $('#sentinel').textContent = loaded < total ? '上滑加载更多…' : ''
 
     if (!d.folders.length && !total && page === 1) {
-      $('#mediaWrap').innerHTML = emptyHTML('这个文件夹是空的', '放入视频或图片后点击管理页「重新扫描」', 'folder')
+      $('#mediaWrap').innerHTML = emptyHTML('这个文件夹是空的', '放入视频或图片后在电脑端重新扫描', 'folder')
       return
     }
 

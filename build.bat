@@ -1,5 +1,6 @@
 @echo off
-rem Hestia Windows 构建脚本（查找顺序：PATH → D:\golang\bin → %USERPROFILE%\tools\go）
+rem Hestia Windows 构建脚本（GUI 版，双击 exe 弹出配置窗口，无控制台黑框）
+rem Go 查找顺序：PATH → D:\golang\bin → %USERPROFILE%\tools\go
 setlocal
 set GO=go
 where go >nul 2>nul
@@ -15,7 +16,6 @@ if errorlevel 1 (
 )
 if not exist dist mkdir dist
 echo 使用 %GO% 构建中...
-%GO% build -trimpath -ldflags "-s -w" -o dist\Hestia.exe .
+%GO% build -trimpath -ldflags "-s -w -H windowsgui" -o dist\Hestia.exe .
 if errorlevel 1 ( echo [失败] & exit /b 1 )
-echo 构建完成: dist\Hestia.exe
-echo 直接双击运行即可（配置与数据保存在 exe 同目录）
+echo 构建完成: dist\Hestia.exe（双击打开配置窗口）

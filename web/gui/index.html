@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hestia 控制台</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg class="logo" viewBox="0 0 24 24" fill="none"><path d="M12 2c.8 3.2-3.5 5.2-3.5 9a3.5 3.5 0 0 0 7 0c0-1.2-.4-2.1-.9-3 1.8.4 2.6-1.7 2.4-3.6C19 6.5 20.5 9 20.5 12a8.5 8.5 0 1 1-17 0C3.5 7.5 8.5 4.3 12 2z"/></svg>
+    <h1>Hestia <span>控制台</span></h1>
+  </header>
+
+  <section class="card status">
+    <div class="row1">
+      <span class="dot" id="dot"></span>
+      <span id="stateText">加载中…</span>
+      <button id="btnToggle" class="btn primary">启动服务</button>
+    </div>
+    <div class="url" id="urlText">—</div>
+    <div class="actions">
+      <button id="btnOpen" class="btn">打开网页</button>
+      <button id="btnLog" class="btn">查看日志</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>媒体库</h2>
+    <div class="addrow">
+      <input id="pathInput" placeholder="输入文件夹路径，如 D:\电影" spellcheck="false">
+      <button id="btnAdd" class="btn primary">添加</button>
+    </div>
+    <div id="libList" class="liblist"></div>
+    <div class="foot">
+      <button id="btnRescan" class="btn">重新扫描</button>
+      <span id="statText" class="muted"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>设置</h2>
+    <div class="setrow">
+      <label>端口</label>
+      <input id="portInput" class="port">
+      <button id="btnPort" class="btn">应用</button>
+    </div>
+    <div class="setrow">
+      <label class="switch"><input type="checkbox" id="chkAuto"><i></i></label>
+      <span>开机自启（登录后自动运行）</span>
+    </div>
+    <div id="ffText" class="muted small"></div>
+  </section>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

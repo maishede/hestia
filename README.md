@@ -5,7 +5,7 @@
 - **单文件**：一个 exe（约 10MB），双击即用，无需安装、无需运行时
 - **纯局域网自用**：免登录、只读（不提供任何删除/修改能力）、页面永不暴露物理路径
 - **手机优先**：响应式浅色 UI（播放器为深色放映厅风格）+ 触屏手势
-- **跨平台**：Windows 一等公民（托盘常驻/开机自启），macOS / Linux 同源编译
+- **跨平台**：Windows 一等公民（WebView2 原生 GUI 窗口 + 开机自启），macOS / Linux 同源编译（控制台模式）
 
 ## 快速开始
 
@@ -33,12 +33,14 @@ GOOS=linux    GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
 
 ### 运行
 
-双击 `Hestia.exe`：
+双击 `Hestia.exe`，弹出**配置窗口**（手机访问的网页只有浏览和播放，不含任何配置）：
 
-1. 首次启动自动打开浏览器进入管理页 `http://127.0.0.1:8080/#/admin`
-2. 添加媒体库路径（如 `D:\电影`、`E:\剧集`，支持多个，**热生效无需重启**）
-3. 管理页/控制台显示局域网地址，手机浏览器输入即可访问
-4. Windows 下默认**托盘常驻**（关闭控制台窗口服务不退出），可勾选**开机自启**
+1. 在窗口的"媒体库路径"输入框填入路径（如 `D:\电影`），点"添加"——支持多个，**热生效无需重启**
+2. 服务默认自启；窗口顶部显示手机访问地址（如 `http://192.168.x.x:8080`），手机浏览器输入即可观看
+3. "关闭服务/启动服务"随时启停；"应用"修改端口；"开机自启"写入注册表（登录后自动运行）
+4. 关闭窗口即退出程序（服务一并停止）
+
+手机网页端 = 搜索 + 浏览 + 播放器，没有任何管理功能。
 
 配置文件 `config.json` 与数据目录 `data/` 都在 exe 同目录，可直接手改（2 秒内热加载）：
 
@@ -60,7 +62,7 @@ GOOS=linux    GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
 
 浏览器普遍无法直接播放 **HEVC(H.265) / AC3 / DTS / RMVB** 等编码。Hestia 检测到这类文件会自动用 ffmpeg 按需转码为 HLS 再播放，无需任何手动操作；播放停止后转码进程自动销毁。
 
-自动查找顺序：exe 同目录 → `bin/` 子目录 → 系统 `PATH`。没有 ffmpeg 时 H.264/MP4 等常规格式仍可直链播放（管理页会给出下载指引）。
+自动查找顺序：exe 同目录 → `bin/` 子目录 → 系统 `PATH`。没有 ffmpeg 时 H.264/MP4 等常规格式仍可直链播放（配置窗口会显示提示）。
 
 ## 功能一览
 
@@ -75,8 +77,8 @@ GOOS=linux    GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
 | 字幕 | 外挂 srt/ass（同名或"视频名.语言"）自动加载默认开启；内嵌文本字幕轨（srt/ass/mov_text）CC 菜单按需提取；统一转 WebVTT 原生渲染 |
 | 进度 | 断点续播（本地 + 服务端合并，较新者胜）；首页"继续观看"带进度条；**多设备进度同步**（最后写入优先） |
 | 转码 | HEVC/MKV/AC3 等自动降级 ffmpeg→HLS；空闲 2 分钟自动销毁；并发上限 3 |
-| 热配置 | 媒体库增删改、端口/监听切换，均不中断服务；每 15 分钟自动增量重扫 |
-| 运维 | 滚动日志（控制台 + `data/logs/hestia.log`，5MB×3）；缩略图/字幕/封面帧磁盘缓存 |
+| 热配置 | 媒体库增删改、端口切换，均不中断服务；每 15 分钟自动增量重扫 |
+| 运维 | Windows GUI 配置窗口（WebView2 加载内嵌页面，与手机端同款浅色设计；启停/路径/端口/自启/重扫/日志；GUI 接口仅绑定 127.0.0.1，局域网不可达）；滚动日志（`data/logs/hestia.log`，5MB×3，窗口可一键打开）；缩略图/字幕/封面帧磁盘缓存 |
 
 ## 目录约定
 
@@ -101,7 +103,7 @@ HESTIA_HOME=./.dev go run .    # 数据/配置隔离到 .dev 目录
 
 - 中文排序按 Unicode 码点序（拼音匹配已覆盖搜索场景）
 - ass 字幕转 VTT 不保留特效样式；内嵌 PGS 图形字幕轨不支持
-- 托盘/开机自启仅 Windows；macOS/Linux 为控制台运行
+- GUI 仅 Windows；macOS/Linux 为控制台运行，配置走 `config.json`
 - 图片缩略图仅 jpeg/png（其他格式回原图）；HEIC 图片大部分浏览器不显示
 
 ## 第三方组件（均已 vendor）
@@ -109,7 +111,7 @@ HESTIA_HOME=./.dev go run .    # 数据/配置隔离到 .dev 目录
 | 组件 | 许可证 | 用途 |
 |---|---|---|
 | [mozillazg/go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | 拼音搜索 |
-| [getlantern/systray](https://github.com/getlantern/systray) | Apache-2.0 | 系统托盘 |
+| [jchv/go-webview2](https://github.com/jchv/go-webview2) | MIT | Windows GUI 窗口（WebView2，Win11 自带运行时） |
 | [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | 桌面浏览器 HLS 播放 |
 | ffmpeg / ffprobe | GPL（外部程序，按需自备） | 转码 / 探测 |
 

@@ -4,7 +4,6 @@ import { FolderView } from './views/folder.js'
 import { SearchView } from './views/search.js'
 import { PlayerView } from './views/player.js'
 import { ImageView } from './views/imageview.js'
-import { AdminView } from './views/admin.js'
 
 const routes = [
   { re: /^#\/$/, view: HomeView, groups: 0 },
@@ -12,7 +11,6 @@ const routes = [
   { re: /^#\/search\?(.+)$/, view: SearchView, groups: 1 },
   { re: /^#\/play\/([A-Za-z0-9_-]+)$/, view: PlayerView, groups: 1 },
   { re: /^#\/image\/([A-Za-z0-9_-]+)$/, view: ImageView, groups: 1 },
-  { re: /^#\/admin$/, view: AdminView, groups: 0 },
 ]
 
 let current = null
@@ -20,8 +18,6 @@ const app = document.getElementById('app')
 
 async function route() {
   let hash = location.hash || '#/'
-  if ((hash === '#/' || hash === '#') && location.pathname.replace(/\/+$/, '') === '/admin') {
-    hash = '#/admin'
   }
   for (const r of routes) {
     const m = hash.match(r.re)

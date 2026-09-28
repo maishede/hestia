@@ -2,7 +2,6 @@ package main
 
 import (
 	"embed"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,8 +15,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/getlantern/systray"
 
 	"hestia/internal/config"
 	"hestia/internal/index"
@@ -46,6 +43,7 @@ type app struct {
 	srv    *server.Server
 	logger *log.Logger
 	home   string
+	dataDir string
 
 	appliedEnabled  map[string]bool
 	appliedPort     int
@@ -56,9 +54,6 @@ type app struct {
 }
 
 func main() {
-	hide := flag.Bool("hide", false, "启动时隐藏控制台窗口（配合托盘，仅 Windows）")
-	flag.Parse()
-
 	home := os.Getenv("HESTIA_HOME")
 	if home == "" {
 		if exe, err := os.Executable(); err == nil {
@@ -67,10 +62,6 @@ func main() {
 			home = "."
 		}
 	}
-	if runtime.GOOS == "windows" { // 控制台切 UTF-8，避免中文乱码
-		_ = exec.Command("cmd", "/c", "chcp", "65001", ">NUL").Run()
-	}
-
 	dataDir := filepath.Join(home, "data")
 	logger := newRotatingLogger(dataDir)
 
@@ -98,28 +89,42 @@ func main() {
 
 	a := &app{
 		cfgM: cfgM, store: store, tc: tc, tr: tr, prog: prog, srv: srv,
-		logger: logger, home: home,
+		logger: logger, home: home, dataDir: dataDir,
 		appliedEnabled:  map[string]bool{},
 		appliedPort:     -1,
-		appliedListen:   "",
 		periodicStopped: make(chan struct{}),
 	}
+	a.apply(cfgM.Get())
+	cfgM.OnChange(a.apply)
+	go a.periodicRescan()
 
-	useTray := cfgM.Get().UseTray() && runtime.GOOS == "windows"
-	if useTray && *hide {
-		hideConsole(true)
-	}
-
-	if err := a.serve(); err != nil {
-		fatal(logger, "%v", err)
-	}
-
-	if useTray {
-		go a.waitSignals(systray.Quit)
-		systray.Run(a.onTrayReady, a.onTrayExit) // 阻塞至托盘退出
+	if runtime.GOOS == "windows" {
+		// GUI 模式：原生窗口承载全部配置与启停，服务默认自启
+		if err := a.srv.StartListener(); err != nil {
+			logger.Printf("服务自启失败（可在窗口中手动启动）: %v", err)
+		}
+		runGUI(a) // 阻塞至窗口关闭 → shutdown
 		return
 	}
-	a.waitSignals(nil)
+
+	// 控制台模式（macOS / Linux）：配置走 config.json
+	if err := a.srv.ListenAndServe(); err != nil {
+		fatal(logger, "%v", err)
+	}
+	if actual := a.srv.Port(); actual != a.cfgM.Get().Port {
+		_ = a.cfgM.Update(func(c *config.Config) { c.Port = actual })
+	}
+	a.banner()
+	if a.cfgM.Get().OpenBrowser {
+		go func() {
+			time.Sleep(600 * time.Millisecond)
+			openBrowser(a.srv.URLs()[0])
+		}()
+	}
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+	fmt.Println("\n正在退出…")
 	a.shutdown()
 }
 
@@ -128,54 +133,19 @@ func fatal(l *log.Logger, format string, v ...any) {
 	os.Exit(1)
 }
 
-// serve 启动监听、应用配置、周期重扫并打印横幅。
-func (a *app) serve() error {
-	if err := a.srv.ListenAndServe(); err != nil {
-		return err
-	}
-	// 端口被占时自动 +1，回写避免每次漂移
-	if actual := a.srv.Port(); actual != a.cfgM.Get().Port {
-		_ = a.cfgM.Update(func(c *config.Config) { c.Port = actual })
-	}
-	a.apply(a.cfgM.Get())
-	a.cfgM.OnChange(a.apply)
-
-	go func() {
-		t := time.NewTicker(15 * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-a.periodicStopped:
-				return
-			case <-t.C:
-				if !a.store.AnyScanning() {
-					a.store.RescanAll()
-				}
+func (a *app) periodicRescan() {
+	t := time.NewTicker(15 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.periodicStopped:
+			return
+		case <-t.C:
+			if !a.store.AnyScanning() {
+				a.store.RescanAll()
 			}
 		}
-	}()
-
-	a.banner()
-	if a.cfgM.Get().OpenBrowser {
-		go func() {
-			time.Sleep(600 * time.Millisecond)
-			openBrowser(a.srv.URLs()[0])
-		}()
 	}
-	return nil
-}
-
-// waitSignals 等待退出信号；onQuit 用于托盘模式下优雅触发退出。
-func (a *app) waitSignals(onQuit func()) {
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
-	fmt.Println("\n正在退出…")
-	if onQuit != nil {
-		onQuit() // systray.Quit → onTrayExit → shutdown
-		return
-	}
-	a.shutdown()
 }
 
 func (a *app) shutdown() {
@@ -187,7 +157,7 @@ func (a *app) shutdown() {
 	a.logger.Print("已退出")
 }
 
-// ---- 配置统一应用器：管理页 API 与手改 config.json 走同一生效路径 ----
+// ---- 配置统一应用器：GUI 修改与手改 config.json 走同一生效路径 ----
 func (a *app) apply(c config.Config) {
 	want := map[string]config.Library{}
 	for _, l := range c.Libraries {
@@ -228,7 +198,8 @@ func (a *app) apply(c config.Config) {
 		}
 		a.appliedEnabled[id] = w.Enabled
 	}
-	if !a.first && (a.appliedPort != c.Port || a.appliedListen != c.Listen) {
+	// 端口/监听：仅在服务运行中热切换；停止状态下下次启动生效
+	if !a.first && (a.appliedPort != c.Port || a.appliedListen != c.Listen) && a.srv.Running() {
 		if err := a.srv.RestartListener(c.Listen, c.Port); err != nil {
 			a.logger.Printf("端口切换失败，继续使用 %d: %v", a.srv.Port(), err)
 		} else {
@@ -249,6 +220,7 @@ func (a *app) apply(c config.Config) {
 	a.first = false
 }
 
+// banner 控制台模式启动横幅。
 func (a *app) banner() {
 	ff := "未检测到（HEVC/MKV 等格式将无法转码兜底，建议放到程序同目录或加入 PATH）"
 	if a.tc.FFmpegOK() {

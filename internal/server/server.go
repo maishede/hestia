@@ -19,7 +19,7 @@ import (
 	"hestia/internal/progress"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 type Server struct {
 	cfg     *config.Manager
@@ -76,19 +76,9 @@ func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, 
 	s.mux.HandleFunc("GET /api/progress/{id}", s.handleProgressGet)
 	s.mux.HandleFunc("DELETE /api/progress/{id}", s.handleProgressDelete)
 	s.mux.HandleFunc("DELETE /api/progress", s.handleProgressClear)
-	// 管理端 API（免登录，仅局域网自用）
-	s.mux.HandleFunc("GET /api/admin/libraries", s.handleAdminLibraries)
-	s.mux.HandleFunc("POST /api/admin/libraries", s.handleAdminLibAdd)
-	s.mux.HandleFunc("PATCH /api/admin/libraries/{id}", s.handleAdminLibPatch)
-	s.mux.HandleFunc("DELETE /api/admin/libraries/{id}", s.handleAdminLibDelete)
-	s.mux.HandleFunc("POST /api/admin/rescan", s.handleAdminRescan)
-	s.mux.HandleFunc("GET /api/admin/status", s.handleAdminStatus)
-	s.mux.HandleFunc("GET /api/admin/config", s.handleAdminConfigGet)
-	s.mux.HandleFunc("PATCH /api/admin/config", s.handleAdminConfigPatch)
 	// 内嵌前端
 	s.mux.Handle("GET /assets/", cacheStatic(http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	s.mux.HandleFunc("GET /{$}", s.serveIndex)
-	s.mux.HandleFunc("GET /admin", s.serveIndex)
 	return s, nil
 }
 
@@ -150,6 +140,36 @@ func (s *Server) RestartListener(listen string, port int) error {
 		_ = old.Shutdown(ctx)
 		cancel()
 	}
+	return s.serveOn(listen, port)
+}
+
+// StartListener 按当前配置启动监听。
+func (s *Server) StartListener() error {
+	c := s.cfg.Get()
+	return s.RestartListener(c.Listen, c.Port)
+}
+
+// StopListener 停止监听（进程不退出）。
+func (s *Server) StopListener() {
+	s.mu.Lock()
+	old := s.srv
+	s.srv = nil
+	s.mu.Unlock()
+	if old != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = old.Shutdown(ctx)
+		cancel()
+	}
+}
+
+// Running 报告服务是否在监听。
+func (s *Server) Running() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.srv != nil
+}
+
+func (s *Server) serveOn(listen string, port int) error {
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
 	if err != nil {
 		return err
