@@ -29,6 +29,8 @@ var (
 	pTCreateMutexW      = tKernel32.NewProc("CreateMutexW")
 	pTLoadIconW         = tUser32.NewProc("LoadIconW")
 	pTMessageBoxW       = tUser32.NewProc("MessageBoxW")
+	pTFindWindowW       = tUser32.NewProc("FindWindowW")
+	pTPostMessageW      = tUser32.NewProc("PostMessageW")
 	pTSendMessageW      = tUser32.NewProc("SendMessageW")
 	pTDestroyWindow     = tUser32.NewProc("DestroyWindow")
 	pTShowWindow        = tUser32.NewProc("ShowWindow")
@@ -119,17 +121,32 @@ func loadAppIcon() syscall.Handle {
 	return appIconSmall
 }
 
-// setupWindowChrome 子类化窗口（拦截 X）、注册托盘图标、设置图标。
-// 返回 true 表示已有实例在运行（应退出本次启动）。
-func setupWindowChrome(hwnd syscall.Handle) bool {
-	guiHwnd = hwnd
+// wmShowFromSecond 实例间消息：第二实例请求第一实例把窗口弹到前台。
+const wmShowFromSecond = 0x8000 + 2 // WM_APP+2
 
-	// 单实例：已运行则提示（旧实例可能在托盘里）
+// singleInstanceTaken 尝试持有单实例互斥体；已有实例时唤醒其窗口并返回 true
+//（本次启动静默退出——多次点击只会打开/唤起一次）。
+// 在 main 最开始调用（任何窗口/服务创建之前）。
+func singleInstanceTaken() bool {
 	_, _, err := pTCreateMutexW.Call(0, 1, t16(`Local\HestiaSingleton`))
 	if errno, ok := err.(syscall.Errno); ok && errno == 183 { // ERROR_ALREADY_EXISTS
-		pTMessageBoxW.Call(0, t16("Hestia 已在运行（可能最小化到了托盘）。\n\n左键托盘图标可恢复窗口，右键图标可选择退出。"), t16("Hestia"), 0x40)
+		// 唤醒已有实例的主窗口（含托盘中的隐藏窗口）；短暂重试覆盖首实例还在初始化的窗口期
+		for i := 0; i < 20; i++ {
+			h, _, _ := pTFindWindowW.Call(0, t16("Hestia 控制台"))
+			if h != 0 {
+				pTPostMessageW.Call(h, wmShowFromSecond, 0, 0)
+				break
+			}
+			timeSleep(50)
+		}
 		return true
 	}
+	return false
+}
+
+// setupWindowChrome 子类化窗口（拦截 X）、注册托盘图标、设置图标。
+func setupWindowChrome(hwnd syscall.Handle) {
+	guiHwnd = hwnd
 
 	loadAppIcons()
 	pTSendMessageW.Call(uintptr(hwnd), wmSetIconT, 1, uintptr(appIconLarge)) // ICON_BIG
@@ -152,7 +169,11 @@ func setupWindowChrome(hwnd syscall.Handle) bool {
 	newWndProcPtr = syscall.NewCallback(trayWndProc)
 	r, _, _ := pTSetWindowLongPtrW.Call(uintptr(hwnd), uintptr(^uintptr(3)), newWndProcPtr)
 	oldWndProc = r
-	return false
+}
+
+// hideMainWindow 静默隐藏窗口（无气泡），用于启动防白屏。
+func hideMainWindow() {
+	pTShowWindow.Call(uintptr(guiHwnd), swHide)
 }
 
 func removeTray() {
@@ -186,6 +207,9 @@ func trayWndProc(hwnd syscall.Handle, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
 	case wmCloseTray: // 点 X：隐藏到托盘
 		hideGuiWindow()
+		return 0
+	case wmShowFromSecond:
+		showGuiWindow()
 		return 0
 	case wmTrayCallback:
 		switch lp & 0xFFFF {

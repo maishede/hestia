@@ -53,11 +53,16 @@ func runGUI(a *app) {
 	defer w.Destroy()
 	w.SetTitle("Hestia 控制台")
 	w.SetSize(600, 760, webview2.HintNone)
-	if setupWindowChrome(syscall.Handle(w.Window())) { // 已有实例（可能在托盘）
-		a.shutdown()
-		return
-	}
+	setupWindowChrome(syscall.Handle(w.Window()))
+	// 防白屏：窗口先隐藏，页面渲染完成（guiReady）后再显示
+	hideMainWindow()
 	defer removeTray()
+	w.Bind("guiReady", func() { showGuiWindow() })
+	// 兜底：页面异常时 5 秒后强制显示，避免永远无窗
+	go func() {
+		time.Sleep(5 * time.Second)
+		w.Dispatch(func() { showGuiWindow() })
+	}()
 	w.Navigate("http://" + ln.Addr().String() + "/")
 	a.logger.Print("GUI 窗口已就绪")
 	w.Run()
@@ -200,6 +205,9 @@ func buildGUIMux(a *app) *http.ServeMux {
 		}
 		_ = a.cfgM.Update(func(c *config.Config) { c.AutoStart = b.Enabled })
 		jwt(w, guiState(a))
+	})
+	mux.HandleFunc("/gui/api/pickdir", func(w http.ResponseWriter, r *http.Request) {
+		jwt(w, map[string]any{"path": pickFolderDialog("选择媒体库文件夹")})
 	})
 	mux.HandleFunc("/gui/api/open", func(w http.ResponseWriter, r *http.Request) {
 		if a.srv.Running() {

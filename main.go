@@ -54,6 +54,9 @@ type app struct {
 }
 
 func main() {
+	if runtime.GOOS == "windows" && singleInstanceTaken() {
+		return // 已有实例（可能在托盘），立即退出不闪窗
+	}
 	home := os.Getenv("HESTIA_HOME")
 	if home == "" {
 		if exe, err := os.Executable(); err == nil {

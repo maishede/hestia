@@ -4,9 +4,12 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 )
+
+func timeSleep(ms int) { time.Sleep(time.Duration(ms) * time.Millisecond) }
 
 // setAutoStart 写入/移除 HKCU Run 注册表项（开机自启）。
 func setAutoStart(enabled bool) error {

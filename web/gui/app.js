@@ -73,6 +73,14 @@ async function refresh() {
   try { render(await api('state')) } catch (e) { console.error(e) }
 }
 
+// 页面首次渲染完成：通知 Go 显示窗口（消除启动白屏）
+let readySignaled = false
+function signalReady() {
+  if (readySignaled) return
+  readySignaled = true
+  try { window.guiReady() } catch {}
+}
+
 function act(fn) {
   return async () => {
     try {
@@ -87,9 +95,18 @@ $('btnOpen').onclick = act(() => { api('open'); return null })
 $('btnLog').onclick = act(() => { api('openlog'); return null })
 $('btnAdd').onclick = act(() => {
   const path = $('pathInput').value.trim()
-  if (!path) { toast('请先填写路径', true); return Promise.resolve(null) }
+  if (!path) { toast('请先填写路径或点「浏览」选择', true); return Promise.resolve(null) }
   return api('add', { path }).then(s => { $('pathInput').value = ''; toast('已添加，后台扫描中'); return s })
 })
+$('btnBrowse').onclick = async () => {
+  const btn = $('btnBrowse')
+  btn.disabled = true
+  try {
+    const r = await api('pickdir')
+    if (r.path) $('pathInput').value = r.path
+  } catch (e) { toast(e.message, true) }
+  btn.disabled = false
+}
 $('btnRescan').onclick = act(() => api('rescan').then(s => { toast('已开始重新扫描'); return s }))
 $('btnPort').onclick = act(() => api('port', { port: parseInt($('portInput').value, 10) }).then(s => { toast('端口已应用'); return s }))
 $('chkAuto').onchange = e => act(() => api('autostart', { enabled: e.target.checked }))()
@@ -120,3 +137,6 @@ $('pathInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnA
 
 refresh()
 setInterval(refresh, 1500)
+// 首个 state 到手即视为渲染完成
+const _firstRender = setInterval(() => { if (state) { clearInterval(_firstRender); signalReady() } }, 60)
+setTimeout(signalReady, 3000) // 兜底
