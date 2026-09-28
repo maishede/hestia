@@ -1,0 +1,209 @@
+// Package server 提供 HTTP 服务：REST API、直链流媒体、转码、内嵌前端静态资源。
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"net"
+	"net/http"
+	"sync"
+	"time"
+
+	"hestia/internal/config"
+	"hestia/internal/index"
+	"hestia/internal/progress"
+)
+
+const Version = "0.2.0"
+
+type Server struct {
+	cfg     *config.Manager
+	store   *index.Store
+	tc      Toolchain
+	tr      *Transcoder
+	prog    *progress.Store
+	dataDir string
+	logger  *log.Logger
+
+	mux   *http.ServeMux
+	index []byte
+
+	mu     sync.Mutex
+	srv    *http.Server
+	port   int
+	listen string
+
+	subMu sync.Mutex // 串行化 ffmpeg 字幕提取/封面抽帧（家用带宽足够，避免磁盘抖动）
+}
+
+func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, prog *progress.Store, dataDir string, webFS fs.FS, logger *log.Logger) (*Server, error) {
+	s := &Server{
+		cfg: cfg, store: store, tc: tc, tr: tr, prog: prog, dataDir: dataDir, logger: logger,
+		mux: http.NewServeMux(),
+	}
+	assets, err := fs.Sub(webFS, "assets")
+	if err != nil {
+		return nil, err
+	}
+	s.index, err = fs.ReadFile(webFS, "index.html")
+	if err != nil {
+		return nil, err
+	}
+
+	// 用户端 API
+	s.mux.HandleFunc("GET /api/server/info", s.handleServerInfo)
+	s.mux.HandleFunc("GET /api/folders", s.handleRoots)
+	s.mux.HandleFunc("GET /api/folders/{id}/children", s.handleChildren)
+	s.mux.HandleFunc("GET /api/search", s.handleSearch)
+	s.mux.HandleFunc("GET /api/media/{id}", s.handleMediaDetail)
+	s.mux.HandleFunc("GET /api/media/{id}/stream", s.handleStream)
+	s.mux.HandleFunc("GET /api/media/{id}/image", s.handleImage)
+	s.mux.HandleFunc("POST /api/media/{id}/transcode", s.handleTranscodeStart)
+	s.mux.HandleFunc("GET /api/transcode/{sid}/{file}", s.handleTranscodeFile)
+	s.mux.HandleFunc("DELETE /api/transcode/{sid}", s.handleTranscodeStop)
+	// 字幕与封面
+	s.mux.HandleFunc("GET /api/subtitle/{id}", s.handleSubtitle)
+	s.mux.HandleFunc("GET /api/media/{id}/embeddedsub/{index}", s.handleEmbeddedSub)
+	s.mux.HandleFunc("GET /api/folders/{id}/cover", s.handleFolderCover)
+	// 播放进度（多设备同步）
+	s.mux.HandleFunc("POST /api/progress", s.handleProgressSet)
+	s.mux.HandleFunc("GET /api/progress/recent", s.handleProgressRecent)
+	s.mux.HandleFunc("GET /api/progress/{id}", s.handleProgressGet)
+	s.mux.HandleFunc("DELETE /api/progress/{id}", s.handleProgressDelete)
+	s.mux.HandleFunc("DELETE /api/progress", s.handleProgressClear)
+	// 管理端 API（免登录，仅局域网自用）
+	s.mux.HandleFunc("GET /api/admin/libraries", s.handleAdminLibraries)
+	s.mux.HandleFunc("POST /api/admin/libraries", s.handleAdminLibAdd)
+	s.mux.HandleFunc("PATCH /api/admin/libraries/{id}", s.handleAdminLibPatch)
+	s.mux.HandleFunc("DELETE /api/admin/libraries/{id}", s.handleAdminLibDelete)
+	s.mux.HandleFunc("POST /api/admin/rescan", s.handleAdminRescan)
+	s.mux.HandleFunc("GET /api/admin/status", s.handleAdminStatus)
+	s.mux.HandleFunc("GET /api/admin/config", s.handleAdminConfigGet)
+	s.mux.HandleFunc("PATCH /api/admin/config", s.handleAdminConfigPatch)
+	s.mux.HandleFunc("GET /api/admin/qrcode", s.handleAdminQRCode)
+	// 内嵌前端
+	s.mux.Handle("GET /assets/", cacheStatic(http.StripPrefix("/assets/", http.FileServerFS(assets))))
+	s.mux.HandleFunc("GET /{$}", s.serveIndex)
+	s.mux.HandleFunc("GET /admin", s.serveIndex)
+	return s, nil
+}
+
+func cacheStatic(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 内嵌资源无 Last-Modified/ETag 校验器，改为 no-cache 确保升级后浏览器取到新版本
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(s.index)
+}
+
+// ListenAndServe 启动监听；端口被占时自动 +1 重试（最多 20 次）。
+func (s *Server) ListenAndServe() error {
+	cfg := s.cfg.Get()
+	port := cfg.Port
+	var ln net.Listener
+	var err error
+	for i := 0; i < 21; i++ {
+		ln, err = net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Listen, port))
+		if err == nil {
+			port += i
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("无法监听 %s:%d: %w", cfg.Listen, cfg.Port, err)
+	}
+	s.mu.Lock()
+	s.port, s.listen = port, cfg.Listen
+	s.srv = &http.Server{Handler: s.mux, ReadHeaderTimeout: 10 * time.Second}
+	s.mu.Unlock()
+	go func() {
+		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Printf("http 服务异常退出: %v", err)
+		}
+	}()
+	return nil
+}
+
+// RestartListener 热切换监听地址/端口（旧连接自然排空，新端口立即生效）。
+func (s *Server) RestartListener(listen string, port int) error {
+	probe, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
+	if err != nil {
+		return fmt.Errorf("端口 %d 不可用: %w", port, err)
+	}
+	_ = probe.Close()
+
+	s.mu.Lock()
+	old := s.srv
+	s.mu.Unlock()
+	if old != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = old.Shutdown(ctx)
+		cancel()
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: s.mux, ReadHeaderTimeout: 10 * time.Second}
+	s.mu.Lock()
+	s.srv, s.port, s.listen = srv, port, listen
+	s.mu.Unlock()
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Printf("http 服务异常退出: %v", err)
+		}
+	}()
+	return nil
+}
+
+func (s *Server) Port() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.port
+}
+
+func (s *Server) ListenHost() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listen
+}
+
+// URLs 返回可访问地址列表（0.0.0.0 时枚举局域网 IPv4）。
+func (s *Server) URLs() []string {
+	s.mu.Lock()
+	host, port := s.listen, s.port
+	s.mu.Unlock()
+	if host != "" && host != "0.0.0.0" && host != "::" {
+		return []string{fmt.Sprintf("http://%s:%d", host, port)}
+	}
+	var out []string
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, ifc := range ifaces {
+			if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+				continue
+			}
+			addrs, _ := ifc.Addrs()
+			for _, a := range addrs {
+				if ipn, ok := a.(*net.IPNet); ok {
+					if ip4 := ipn.IP.To4(); ip4 != nil {
+						out = append(out, fmt.Sprintf("http://%s:%d", ip4, port))
+					}
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, fmt.Sprintf("http://127.0.0.1:%d", port))
+	}
+	return out
+}

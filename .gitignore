@@ -1,0 +1,12 @@
+# 构建产物
+*.exe
+dist/
+data/
+.dev/
+
+# 演示媒体树
+.demo-media/
+
+# 编辑器
+.vscode/
+.idea/
