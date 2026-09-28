@@ -177,6 +177,7 @@ func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(ctx, s.tc.FFmpeg,
 		"-nostdin", "-hide_banner", "-loglevel", "error",
 		"-i", abs, "-map", "0:"+strconv.Itoa(idx), "-y", cache)
+	hideChildWindow(cmd)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		_ = os.Remove(cache)
@@ -243,6 +244,7 @@ func (s *Server) handleFolderCover(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(ctx, s.tc.FFmpeg,
 		"-nostdin", "-hide_banner", "-loglevel", "error",
 		"-ss", "3", "-i", abs, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-y", cache)
+	hideChildWindow(cmd)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		_ = os.Remove(cache)

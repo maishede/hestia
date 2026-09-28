@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"syscall"
@@ -216,7 +215,11 @@ func buildGUIMux(a *app) *http.ServeMux {
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/openlog", func(w http.ResponseWriter, r *http.Request) {
-		_ = exec.Command("cmd", "/c", "start", "", filepath.Join(a.dataDir, "logs", "hestia.log")).Start()
+		logPath := filepath.Join(a.dataDir, "logs", "hestia.log")
+		if _, err := os.Stat(logPath); err != nil { // 还没有日志文件时先落一条，保证能打开
+			a.logger.Print("查看日志")
+		}
+		shellOpen(logPath)
 		jwt(w, guiState(a))
 	})
 	return mux

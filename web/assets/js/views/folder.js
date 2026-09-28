@@ -8,6 +8,7 @@ export async function FolderView(app, id) {
   let page = 1
   let sentinel = null
   let observer = null
+  let destroyed = false
 
   app.innerHTML = `<div class="page">
     <div id="crumb" class="breadcrumb">${skeleton(1)}</div>
@@ -39,6 +40,8 @@ export async function FolderView(app, id) {
 
   async function loadPage(append) {
     const d = await api(`/api/folders/${id}/children?page=${page}&size=20&sort=${sort.key}&order=${sort.order}`)
+    if (destroyed) return
+    if (!d || !Array.isArray(d.folders) || !d.media) return
     renderCrumb(d.breadcrumb, d.folder)
     $('#fname').textContent = d.breadcrumb.length ? d.breadcrumb[d.breadcrumb.length - 1].name : ''
 
@@ -84,7 +87,7 @@ export async function FolderView(app, id) {
     if (observer) return
     sentinel = $('#sentinel')
     observer = new IntersectionObserver(async entries => {
-      if (!entries[0].isIntersecting) return
+      if (!entries[0].isIntersecting || destroyed) return
       if (observer.loading) return
       observer.loading = true
       page += 1
@@ -107,6 +110,9 @@ export async function FolderView(app, id) {
 
   await loadPage(false)
   return {
-    destroy() { if (observer) observer.disconnect() },
+    destroy() {
+      destroyed = true
+      if (observer) observer.disconnect()
+    },
   }
 }

@@ -140,6 +140,7 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 		filepath.Join(dir, "index.m3u8"),
 	}
 	cmd := exec.Command(t.ffmpeg, args...)
+	hideChildWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {

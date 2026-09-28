@@ -66,6 +66,7 @@ func RunFFprobe(ffprobe, path string) (*ProbeResult, error) {
 		"-v", "error", "-print_format", "json",
 		"-show_entries", "format=duration:stream=index,codec_type,codec_name,width,height:stream_tags=language,title",
 		path)
+	hideChildWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

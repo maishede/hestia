@@ -10,7 +10,11 @@ export async function api(path, opts = {}) {
     throw new Error(msg)
   }
   if (res.status === 204) return null
-  return res.json()
+  const ct = res.headers.get('content-type') || ''
+  if (!ct.includes('json')) throw new Error('服务响应异常，请稍后重试')
+  const j = await res.json()
+  if (j === null || j === undefined) throw new Error('服务返回为空，请稍后重试')
+  return j
 }
 
 export function post(path, body) {

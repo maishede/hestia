@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -50,7 +49,6 @@ type app struct {
 	appliedListen   string
 	appliedAuto     *bool
 	first           bool
-	periodicStopped chan struct{}
 }
 
 func main() {
@@ -93,13 +91,11 @@ func main() {
 	a := &app{
 		cfgM: cfgM, store: store, tc: tc, tr: tr, prog: prog, srv: srv,
 		logger: logger, home: home, dataDir: dataDir,
-		appliedEnabled:  map[string]bool{},
-		appliedPort:     -1,
-		periodicStopped: make(chan struct{}),
+		appliedEnabled: map[string]bool{},
+		appliedPort:    -1,
 	}
 	a.apply(cfgM.Get())
 	cfgM.OnChange(a.apply)
-	go a.periodicRescan()
 
 	if runtime.GOOS == "windows" {
 		// GUI 模式：原生窗口承载全部配置与启停，服务默认自启
@@ -136,23 +132,7 @@ func fatal(l *log.Logger, format string, v ...any) {
 	os.Exit(1)
 }
 
-func (a *app) periodicRescan() {
-	t := time.NewTicker(15 * time.Minute)
-	defer t.Stop()
-	for {
-		select {
-		case <-a.periodicStopped:
-			return
-		case <-t.C:
-			if !a.store.AnyScanning() {
-				a.store.RescanAll()
-			}
-		}
-	}
-}
-
 func (a *app) shutdown() {
-	close(a.periodicStopped)
 	a.tr.Close()
 	a.store.Close()
 	a.prog.Close()
@@ -243,18 +223,7 @@ func (a *app) banner() {
 	a.logger.Print(b.String())
 }
 
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	_ = cmd.Start()
-}
+func openBrowser(url string) { shellOpen(url) }
 
 // ---- 滚动日志 ----
 

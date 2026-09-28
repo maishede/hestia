@@ -8,7 +8,10 @@ const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
 
 export async function PlayerView(app, id) {
   document.body.classList.add('player-mode')
-  const meta = await api(`/api/media/${id}`)
+  const meta = await api(`/api/media/${id}`).catch(e => {
+    throw new Error(e.message || '视频不存在或已被移除')
+  })
+  if (!meta || !meta.stream) throw new Error('视频信息加载失败，请返回重试')
 
   // 字幕轨道清单（外挂 + 内嵌文本轨）
   const subExt = (meta.subtitles && meta.subtitles.external) || []

@@ -73,7 +73,7 @@ export async function HomeView(app) {
 
   async function load() {
     const d = await api(`/api/folders?sort=${sort.key}&order=${sort.order}`)
-    if (!d.folders.length) {
+    if (!d || !Array.isArray(d.folders) || !d.folders.length) {
       grid.outerHTML = emptyHTML('还没有内容', '在电脑端 Hestia 窗口添加视频文件夹路径，或等待扫描完成')
       return
     }

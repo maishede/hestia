@@ -12,6 +12,7 @@ export async function SearchView(app, qs) {
   let sort = { key: 'relevance', order: 'desc' }
   let page = 1
   let observer = null
+  let destroyed = false
 
   app.innerHTML = `<div class="page">
     <div class="page-head">
@@ -48,7 +49,7 @@ export async function SearchView(app, qs) {
   function ensureObserver() {
     if (observer) return
     observer = new IntersectionObserver(async entries => {
-      if (!entries[0].isIntersecting || observer.loading) return
+      if (!entries[0].isIntersecting || destroyed || observer.loading) return
       observer.loading = true
       page += 1
       try { await loadPage(true) } catch (e) { console.error(e) }
@@ -85,6 +86,7 @@ export async function SearchView(app, qs) {
 
   return {
     destroy() {
+      destroyed = true
       input.removeEventListener('input', handler)
       if (observer) observer.disconnect()
     },
