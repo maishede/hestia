@@ -19,7 +19,7 @@ import (
 	"hestia/internal/progress"
 )
 
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 type Server struct {
 	cfg     *config.Manager
@@ -124,23 +124,26 @@ func (s *Server) ListenAndServe() error {
 	return nil
 }
 
-// RestartListener 热切换监听地址/端口（旧连接自然排空，新端口立即生效）。
+// RestartListener 热切换监听地址/端口：先抢新端口（旧监听不动，失败保持现状），
+// 成功后再排空旧连接；目标与当前一致时为无操作。
 func (s *Server) RestartListener(listen string, port int) error {
-	probe, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
+	s.mu.Lock()
+	old, curPort, curListen := s.srv, s.port, s.listen
+	s.mu.Unlock()
+	if old != nil && curPort == port && curListen == listen {
+		return nil
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
 	if err != nil {
 		return fmt.Errorf("端口 %d 不可用: %w", port, err)
 	}
-	_ = probe.Close()
-
-	s.mu.Lock()
-	old := s.srv
-	s.mu.Unlock()
 	if old != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		_ = old.Shutdown(ctx)
 		cancel()
 	}
-	return s.serveOn(listen, port)
+	s.serveOn(ln, listen, port)
+	return nil
 }
 
 // StartListener 按当前配置启动监听。
@@ -169,11 +172,7 @@ func (s *Server) Running() bool {
 	return s.srv != nil
 }
 
-func (s *Server) serveOn(listen string, port int) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
-	if err != nil {
-		return err
-	}
+func (s *Server) serveOn(ln net.Listener, listen string, port int) {
 	srv := &http.Server{Handler: s.mux, ReadHeaderTimeout: 10 * time.Second}
 	s.mu.Lock()
 	s.srv, s.port, s.listen = srv, port, listen
@@ -183,7 +182,6 @@ func (s *Server) serveOn(listen string, port int) error {
 			s.logger.Printf("http 服务异常退出: %v", err)
 		}
 	}()
-	return nil
 }
 
 func (s *Server) Port() int {

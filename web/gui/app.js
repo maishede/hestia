@@ -3,10 +3,12 @@ const $ = id => document.getElementById(id)
 let state = null
 
 async function api(path, body) {
-  const opts = body !== undefined
-    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-    : {}
-  const r = await fetch('/gui/api/' + path, opts)
+  // 与后端约定：全部走 POST + JSON（无参数发空对象），避免 GET/POST 路由错配
+  const r = await fetch('/gui/api/' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
   if (!r.ok) {
     let msg = 'HTTP ' + r.status
     try { msg = (await r.json()).error || msg } catch {}
@@ -28,6 +30,8 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
+let lastLibsJson = ''
+
 function render(s) {
   state = s
   // 状态卡
@@ -38,20 +42,24 @@ function render(s) {
   $('urlText').textContent = s.running && s.urls.length
     ? '手机浏览器访问：' + s.urls.join('  或  ')
     : '服务未启动，手机无法访问'
-  // 媒体库
-  const list = $('libList')
-  list.innerHTML = s.libs.length ? s.libs.map(l => `
-    <div class="libitem ${l.enabled ? '' : 'off'}" data-id="${l.id}">
-      <span class="libdot ${l.scanning ? 'scan' : (l.enabled ? '' : 'off')}"></span>
-      <div class="libmain">
-        <div class="libname">${esc(l.label)}</div>
-        <div class="libpath">${esc(l.path)}</div>
-        <div class="libstat">${l.scanning ? '扫描中… ' + l.files + ' 项' : (l.lastErr ? '错误：' + esc(l.lastErr) : l.files + ' 文件 · ' + l.dirs + ' 文件夹')}</div>
-      </div>
-      <label class="switch" title="启用/停用"><input type="checkbox" class="liben" ${l.enabled ? 'checked' : ''}><i></i></label>
-      <button class="btn danger libdel">移除</button>
-    </div>`).join('')
-    : '<div class="muted" style="padding:14px 4px">还没有媒体库，在上方输入视频文件夹路径添加</div>'
+  // 媒体库：数据未变化时跳过重建，避免打断交互（如两连击确认）
+  const libsJson = JSON.stringify(s.libs)
+  if (libsJson !== lastLibsJson) {
+    lastLibsJson = libsJson
+    const list = $('libList')
+    list.innerHTML = s.libs.length ? s.libs.map(l => `
+      <div class="libitem ${l.enabled ? '' : 'off'}" data-id="${l.id}">
+        <span class="libdot ${l.scanning ? 'scan' : (l.enabled ? '' : 'off')}"></span>
+        <div class="libmain">
+          <div class="libname">${esc(l.label)}</div>
+          <div class="libpath">${esc(l.path)}</div>
+          <div class="libstat">${l.scanning ? '扫描中… ' + l.files + ' 项' : (l.lastErr ? '错误：' + esc(l.lastErr) : l.files + ' 文件 · ' + l.dirs + ' 文件夹')}</div>
+        </div>
+        <label class="switch" title="启用/停用"><input type="checkbox" class="liben" ${l.enabled ? 'checked' : ''}><i></i></label>
+        <button class="btn danger libdel">移除</button>
+      </div>`).join('')
+      : '<div class="muted" style="padding:14px 4px">还没有媒体库，在上方输入视频文件夹路径添加</div>'
+  }
   $('statText').textContent = s.scanning ? '后台扫描中…' : `索引：${s.folders} 文件夹 · ${s.media} 媒体`
   // 设置
   if (document.activeElement !== $('portInput')) $('portInput').value = s.port
@@ -86,14 +94,20 @@ $('btnRescan').onclick = act(() => api('rescan').then(s => { toast('已开始重
 $('btnPort').onclick = act(() => api('port', { port: parseInt($('portInput').value, 10) }).then(s => { toast('端口已应用'); return s }))
 $('chkAuto').onchange = e => act(() => api('autostart', { enabled: e.target.checked }))()
 
+// 移除：两连击确认（第一次变为「确认?」，2.5 秒内再点生效）
+let removeTimer = null
 $('libList').addEventListener('click', e => {
   const del = e.target.closest('.libdel')
-  if (del) {
-    const id = del.closest('.libitem').dataset.id
-    if (!confirm('移除该媒体库？（只删除索引，不会动任何文件）')) return
-    act(() => api('remove', { id }))()
+  if (!del) return
+  const item = del.closest('.libitem')
+  if (del.dataset.confirm) {
+    clearTimeout(removeTimer)
+    act(() => api('remove', { id: item.dataset.id }))()
     return
   }
+  del.dataset.confirm = '1'
+  del.textContent = '确认?'
+  removeTimer = setTimeout(() => { del.textContent = '移除'; delete del.dataset.confirm }, 2500)
 })
 $('libList').addEventListener('change', e => {
   const en = e.target.closest('.liben')

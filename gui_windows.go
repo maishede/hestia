@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -43,10 +44,20 @@ func runGUI(a *app) {
 		}
 	}()
 
-	w := webview2.New(false)
+	// WebView2 的用户数据也固定在 exe 同目录，不在系统盘留任何文件
+	w := webview2.NewWithOptions(webview2.WebViewOptions{
+		Debug:     false,
+		AutoFocus: true,
+		DataPath:  filepath.Join(a.dataDir, "webview"),
+	})
 	defer w.Destroy()
 	w.SetTitle("Hestia 控制台")
 	w.SetSize(600, 760, webview2.HintNone)
+	if setupWindowChrome(syscall.Handle(w.Window())) { // 已有实例（可能在托盘）
+		a.shutdown()
+		return
+	}
+	defer removeTray()
 	w.Navigate("http://" + ln.Addr().String() + "/")
 	a.logger.Print("GUI 窗口已就绪")
 	w.Run()
@@ -58,7 +69,7 @@ func buildGUIMux(a *app) *http.ServeMux {
 
 	// 内嵌控制台页面（web/gui）
 	if guiFS, err := fs.Sub(webFiles, "web/gui"); err == nil {
-		mux.Handle("GET /", http.FileServerFS(guiFS))
+		mux.Handle("/", http.FileServerFS(guiFS))
 	}
 
 	jwt := func(w http.ResponseWriter, v any) {
@@ -78,10 +89,10 @@ func buildGUIMux(a *app) *http.ServeMux {
 		return true
 	}
 
-	mux.HandleFunc("GET /gui/api/state", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/state", func(w http.ResponseWriter, r *http.Request) {
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/toggle-service", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/toggle-service", func(w http.ResponseWriter, r *http.Request) {
 		if a.srv.Running() {
 			a.srv.StopListener()
 			a.logger.Print("GUI：服务已停止")
@@ -94,7 +105,7 @@ func buildGUIMux(a *app) *http.ServeMux {
 		}
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/add", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/add", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Path string `json:"path"` }
 		if !body(w, r, &b) || b.Path == "" {
 			jerr(w, "请填写路径")
@@ -120,7 +131,7 @@ func buildGUIMux(a *app) *http.ServeMux {
 		}
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/remove", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/remove", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ ID string `json:"id"` }
 		if !body(w, r, &b) {
 			return
@@ -141,7 +152,7 @@ func buildGUIMux(a *app) *http.ServeMux {
 		})
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/toggle", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/toggle", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
 			ID      string `json:"id"`
 			Enabled bool   `json:"enabled"`
@@ -163,11 +174,11 @@ func buildGUIMux(a *app) *http.ServeMux {
 		})
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/rescan", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/rescan", func(w http.ResponseWriter, r *http.Request) {
 		go a.store.RescanAll()
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/port", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/port", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Port int `json:"port"` }
 		if !body(w, r, &b) || b.Port < 1 || b.Port > 65535 {
 			jerr(w, "端口取值 1-65535")
@@ -182,7 +193,7 @@ func buildGUIMux(a *app) *http.ServeMux {
 		}
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/autostart", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/autostart", func(w http.ResponseWriter, r *http.Request) {
 		var b struct{ Enabled bool `json:"enabled"` }
 		if !body(w, r, &b) {
 			return
@@ -190,13 +201,13 @@ func buildGUIMux(a *app) *http.ServeMux {
 		_ = a.cfgM.Update(func(c *config.Config) { c.AutoStart = b.Enabled })
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/open", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/open", func(w http.ResponseWriter, r *http.Request) {
 		if a.srv.Running() {
 			openBrowser(a.srv.URLs()[0])
 		}
 		jwt(w, guiState(a))
 	})
-	mux.HandleFunc("POST /gui/api/openlog", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/gui/api/openlog", func(w http.ResponseWriter, r *http.Request) {
 		_ = exec.Command("cmd", "/c", "start", "", filepath.Join(a.dataDir, "logs", "hestia.log")).Start()
 		jwt(w, guiState(a))
 	})
