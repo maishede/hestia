@@ -310,7 +310,7 @@ func (s *Store) folderSummary(f *Folder) FolderSummary {
 func (s *Store) Roots(sortKey, order string) []FolderSummary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []FolderSummary
+	var out = make([]FolderSummary, 0, 16)
 	for _, f := range s.folders {
 		if f.ParentID == "" {
 			out = append(out, s.folderSummary(f))
@@ -496,7 +496,7 @@ func (s *Store) Children(folderID string, page, size int, sortKey, order string)
 	if _, ok := s.folders[folderID]; !ok {
 		return ChildrenResult{}, fmt.Errorf("文件夹不存在")
 	}
-	res := ChildrenResult{Breadcrumb: s.breadcrumbLocked(folderID)}
+	res := ChildrenResult{Breadcrumb: s.breadcrumbLocked(folderID), Folders: []FolderSummary{}}
 	if ids, ok := s.childFolders[folderID]; ok {
 		for _, id := range ids {
 			res.Folders = append(res.Folders, s.folderSummary(s.folders[id]))

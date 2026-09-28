@@ -41,7 +41,9 @@ export async function FolderView(app, id) {
   async function loadPage(append) {
     const d = await api(`/api/folders/${id}/children?page=${page}&size=20&sort=${sort.key}&order=${sort.order}`)
     if (destroyed) return
-    if (!d || !Array.isArray(d.folders) || !d.media) return
+    if (!d || !d.media) return
+    d.folders = d.folders || [] // 兼容空目录（历史版本返回 null）
+    d.media.items = d.media.items || []
     renderCrumb(d.breadcrumb, d.folder)
     $('#fname').textContent = d.breadcrumb.length ? d.breadcrumb[d.breadcrumb.length - 1].name : ''
 

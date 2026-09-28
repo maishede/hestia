@@ -205,8 +205,17 @@ func hideGuiWindow() {
 
 func trayWndProc(hwnd syscall.Handle, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
-	case wmCloseTray: // 点 X：隐藏到托盘
-		hideGuiWindow()
+	case wmCloseTray: // 点 X：弹框选择「最小化到托盘」或「退出」
+		ret, _, _ := pTMessageBoxW.Call(0,
+			t16("最小化到托盘继续运行？\n\n「是」— 缩到托盘，服务继续（左键托盘图标恢复窗口）\n「否」— 退出 Hestia 并停止服务"),
+			t16("关闭 Hestia"), 0x24) // MB_YESNO | MB_ICONQUESTION
+		switch ret {
+		case 6: // IDYES → 托盘
+			hideGuiWindow()
+		case 7: // IDNO → 真正退出
+			removeTray()
+			pTDestroyWindow.Call(uintptr(guiHwnd))
+		}
 		return 0
 	case wmShowFromSecond:
 		showGuiWindow()
