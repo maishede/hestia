@@ -58,7 +58,7 @@ export async function AdminView(app) {
           <div class="kv"><b>访问地址</b><span>${c.urls.map(u => `<a href="${u}" style="color:var(--accent)">${u}</a>`).join('<br>') || '-'}</span></div>
         </div>
         <div style="text-align:center">
-          <img src="/api/admin/qrcode" alt="扫码访问" width="164" height="164" style="border-radius:12px;background:#fff;padding:8px">
+          <img src="/api/admin/qrcode" alt="扫码访问" width="164" height="164" style="border-radius:12px;border:1px solid var(--line)">
           <div style="font-size:12px;color:var(--muted);margin-top:6px">手机扫码直达</div>
         </div>
       </div>`
