@@ -18,7 +18,6 @@ const app = document.getElementById('app')
 
 async function route() {
   let hash = location.hash || '#/'
-  }
   for (const r of routes) {
     const m = hash.match(r.re)
     if (m) {
