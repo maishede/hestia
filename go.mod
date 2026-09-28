@@ -5,7 +5,6 @@ go 1.27
 require (
 	github.com/getlantern/systray v1.2.2
 	github.com/mozillazg/go-pinyin v0.21.0
-	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/sys v0.1.0
 )
 

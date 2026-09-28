@@ -53,14 +53,8 @@ export async function AdminView(app) {
         </div>
         <button class="btn" id="btn-svc-save">应用</button>
       </div>
-      <div class="row" style="margin-top:14px;align-items:flex-start">
-        <div style="flex:1;min-width:240px">
-          <div class="kv"><b>访问地址</b><span>${c.urls.map(u => `<a href="${u}" style="color:var(--accent)">${u}</a>`).join('<br>') || '-'}</span></div>
-        </div>
-        <div style="text-align:center">
-          <img src="/api/admin/qrcode" alt="扫码访问" width="164" height="164" style="border-radius:12px;border:1px solid var(--line)">
-          <div style="font-size:12px;color:var(--muted);margin-top:6px">手机扫码直达</div>
-        </div>
+      <div style="margin-top:14px">
+        <div class="kv"><b>访问地址</b><span>${c.urls.map(u => `<a href="${u}" style="color:var(--accent)">${u}</a>`).join('<br>') || '-'}</span></div>
       </div>`
     $('#btn-svc-save').addEventListener('click', async () => {
       try {

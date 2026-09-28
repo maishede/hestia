@@ -9,6 +9,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,7 +85,6 @@ func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, 
 	s.mux.HandleFunc("GET /api/admin/status", s.handleAdminStatus)
 	s.mux.HandleFunc("GET /api/admin/config", s.handleAdminConfigGet)
 	s.mux.HandleFunc("PATCH /api/admin/config", s.handleAdminConfigPatch)
-	s.mux.HandleFunc("GET /api/admin/qrcode", s.handleAdminQRCode)
 	// 内嵌前端
 	s.mux.Handle("GET /assets/", cacheStatic(http.StripPrefix("/assets/", http.FileServerFS(assets))))
 	s.mux.HandleFunc("GET /{$}", s.serveIndex)
@@ -177,7 +178,7 @@ func (s *Server) ListenHost() string {
 	return s.listen
 }
 
-// URLs 返回可访问地址列表（0.0.0.0 时枚举局域网 IPv4）。
+// URLs 返回局域网访问地址（过滤虚拟网卡：WSL/Hyper-V/VMware 等，排除 198.18 基准网段与链路本地地址）。
 func (s *Server) URLs() []string {
 	s.mu.Lock()
 	host, port := s.listen, s.port
@@ -192,18 +193,52 @@ func (s *Server) URLs() []string {
 			if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 				continue
 			}
+			if isVirtualNIC(ifc.Name) {
+				continue
+			}
 			addrs, _ := ifc.Addrs()
 			for _, a := range addrs {
-				if ipn, ok := a.(*net.IPNet); ok {
-					if ip4 := ipn.IP.To4(); ip4 != nil {
-						out = append(out, fmt.Sprintf("http://%s:%d", ip4, port))
-					}
+				ipn, ok := a.(*net.IPNet)
+				if !ok {
+					continue
 				}
+				ip4 := ipn.IP.To4()
+				if ip4 == nil || ip4.IsLoopback() || ip4.IsLinkLocalUnicast() {
+					continue
+				}
+				if ip4[0] == 198 && ip4[1]&0xFE == 18 { // 198.18.0.0/15 基准测试/代理 TUN 网段
+					continue
+				}
+				out = append(out, fmt.Sprintf("http://%s:%d", ip4, port))
 			}
 		}
 	}
+	// 常用网段优先：192.168 → 10 → 172.16-31 → 其他
+	rank := func(u string) int {
+		switch {
+		case strings.HasPrefix(u, "http://192.168."):
+			return 0
+		case strings.HasPrefix(u, "http://10."):
+			return 1
+		case strings.HasPrefix(u, "http://172."):
+			return 2
+		}
+		return 3
+	}
+	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
 	if len(out) == 0 {
 		out = append(out, fmt.Sprintf("http://127.0.0.1:%d", port))
 	}
 	return out
+}
+
+// isVirtualNIC 按网卡名识别虚拟适配器（大小写不敏感）。
+func isVirtualNIC(name string) bool {
+	n := strings.ToLower(name)
+	for _, key := range []string{"loopback", "vethernet", "wsl", "vmware", "virtualbox", "tap-", "bluetooth", "蓝牙"} {
+		if strings.Contains(n, key) {
+			return true
+		}
+	}
+	return false
 }

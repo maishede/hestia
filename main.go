@@ -263,7 +263,7 @@ func (a *app) banner() {
 	}
 	b.WriteString("│  ffmpeg: " + ff + "\n")
 	b.WriteString("│  配置: " + filepath.Join(a.home, "config.json") + "\n")
-	b.WriteString("│  手机浏览器扫码/输入上方地址即可观看          │\n")
+	b.WriteString("│  手机浏览器输入上方地址即可观看              │\n")
 	b.WriteString("└─────────────────────────────────────────────┘")
 	a.logger.Print(b.String())
 }

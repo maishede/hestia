@@ -19,7 +19,17 @@ build.bat
 ./build.sh
 ```
 
-需要 Go 1.22+。第三方依赖已 vendor 到仓库（离线可构建）。产物在 `dist/Hestia(.exe)`，前端已内嵌。
+需要 Go 1.22+。第三方依赖已 vendor 到仓库（离线可构建）。产物在 `dist/Hestia(.exe)`。
+
+**前端不需要单独构建**：前端是原生 HTML/CSS/ES Modules（无 npm、无打包步骤），`go:embed` 在编译时把 `web/` 目录整个打进 exe，运行时由 Go 服务直接输出。改前端只需重新执行构建命令。`web/assets/js/vendor/hls.min.js` 是预下载的第三方库，已随源码入库，同样无需下载。
+
+交叉编译（在任意平台构建其他平台产物）：
+
+```bash
+GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia.exe .
+GOOS=darwin   GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
+GOOS=linux    GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
+```
 
 ### 运行
 
@@ -27,7 +37,7 @@ build.bat
 
 1. 首次启动自动打开浏览器进入管理页 `http://127.0.0.1:8080/#/admin`
 2. 添加媒体库路径（如 `D:\电影`、`E:\剧集`，支持多个，**热生效无需重启**）
-3. 管理页/控制台显示局域网地址与**二维码**，手机扫码直达
+3. 管理页/控制台显示局域网地址，手机浏览器输入即可访问
 4. Windows 下默认**托盘常驻**（关闭控制台窗口服务不退出），可勾选**开机自启**
 
 配置文件 `config.json` 与数据目录 `data/` 都在 exe 同目录，可直接手改（2 秒内热加载）：
@@ -66,7 +76,7 @@ build.bat
 | 进度 | 断点续播（本地 + 服务端合并，较新者胜）；首页"继续观看"带进度条；**多设备进度同步**（最后写入优先） |
 | 转码 | HEVC/MKV/AC3 等自动降级 ffmpeg→HLS；空闲 2 分钟自动销毁；并发上限 3 |
 | 热配置 | 媒体库增删改、端口/监听切换，均不中断服务；每 15 分钟自动增量重扫 |
-| 运维 | 滚动日志（控制台 + `data/logs/hestia.log`，5MB×3）；缩略图/字幕/封面帧磁盘缓存；二维码扫码访问 |
+| 运维 | 滚动日志（控制台 + `data/logs/hestia.log`，5MB×3）；缩略图/字幕/封面帧磁盘缓存 |
 
 ## 目录约定
 
@@ -98,7 +108,6 @@ HESTIA_HOME=./.dev go run .    # 数据/配置隔离到 .dev 目录
 
 | 组件 | 许可证 | 用途 |
 |---|---|---|
-| [skip2/go-qrcode](https://github.com/skip2/go-qrcode) | MIT | 访问二维码 |
 | [mozillazg/go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | 拼音搜索 |
 | [getlantern/systray](https://github.com/getlantern/systray) | Apache-2.0 | 系统托盘 |
 | [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | 桌面浏览器 HLS 播放 |

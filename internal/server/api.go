@@ -7,9 +7,6 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"strings"
-
-	qrcode "github.com/skip2/go-qrcode"
 
 	"hestia/internal/config"
 	"hestia/internal/index"
@@ -429,34 +426,4 @@ func (s *Server) handleProgressDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProgressClear(w http.ResponseWriter, r *http.Request) {
 	s.prog.Clear()
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// ---------- 二维码 ----------
-
-// handleAdminQRCode 输出局域网访问地址二维码 PNG（优先 192.168 网段）。
-func (s *Server) handleAdminQRCode(w http.ResponseWriter, r *http.Request) {
-	url := r.URL.Query().Get("url")
-	if url == "" {
-		url = pickLANURL(s.URLs())
-	}
-	png, err := qrcode.Encode(url, qrcode.Medium, 320)
-	if err != nil {
-		errJSON(w, http.StatusInternalServerError, "二维码生成失败")
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "no-cache")
-	_, _ = w.Write(png)
-}
-
-func pickLANURL(urls []string) string {
-	for _, u := range urls {
-		if strings.Contains(u, "192.168.") {
-			return u
-		}
-	}
-	if len(urls) > 0 {
-		return urls[0]
-	}
-	return "http://127.0.0.1"
 }
