@@ -115,14 +115,8 @@ func shellNotify(dwMessage uint32, data *notifyIconDataW) bool {
 }
 
 func loadAppIcon() syscall.Handle {
-	ico := buildIcon()
-	h, _, _ := pTCreateIconFromRes.Call(
-		uintptr(unsafe.Pointer(&ico[0])), uintptr(len(ico)), 1, 0x00030000, 32, 32, 0)
-	if h != 0 {
-		return syscall.Handle(h)
-	}
-	hi, _, _ := pTLoadIconW.Call(0, 32512) // IDI_APPLICATION 兜底
-	return syscall.Handle(hi)
+	loadAppIcons()
+	return appIconSmall
 }
 
 // setupWindowChrome 子类化窗口（拦截 X）、注册托盘图标、设置图标。
@@ -137,9 +131,10 @@ func setupWindowChrome(hwnd syscall.Handle) bool {
 		return true
 	}
 
-	icon := loadAppIcon()
-	pTSendMessageW.Call(uintptr(hwnd), wmSetIconT, 1, uintptr(icon)) // ICON_BIG
-	pTSendMessageW.Call(uintptr(hwnd), wmSetIconT, 0, uintptr(icon)) // ICON_SMALL
+	loadAppIcons()
+	pTSendMessageW.Call(uintptr(hwnd), wmSetIconT, 1, uintptr(appIconLarge)) // ICON_BIG
+	pTSendMessageW.Call(uintptr(hwnd), wmSetIconT, 0, uintptr(appIconSmall)) // ICON_SMALL
+	icon := appIconSmall
 
 	trayIconData = notifyIconDataW{
 		CbSize:           uint32(unsafe.Sizeof(trayIconData)),

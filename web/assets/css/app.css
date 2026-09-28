@@ -43,8 +43,7 @@ svg { display: block; }
   border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
-.brand-ico { width: 24px; height: 24px; }
-.brand-ico .flame { stroke: var(--accent); stroke-width: 1.6; fill: rgba(61, 110, 242, .16); }
+.brand-ico { width: 26px; height: 26px; border-radius: 7px; }
 .brand-name { font-weight: 700; letter-spacing: .4px; font-size: 16px; }
 .searchbox {
   flex: 1; max-width: 520px; margin-left: auto;

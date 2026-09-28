@@ -1,69 +1,44 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
-	"image"
-	"image/color"
-	"image/png"
+	_ "embed"
+	"syscall"
+	"unsafe"
 )
 
-// buildIcon 运行时绘制应用图标（圆角方块 + 火焰），打包为 PNG-in-ICO。
-func buildIcon() []byte {
-	const size = 32
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	accent := color.RGBA{61, 110, 242, 255}
-	white := color.RGBA{255, 255, 255, 255}
+// 应用图标（icon-master.png 生成，2026-09-29）。
+//go:embed icon-32.png
+var icon32PNG []byte
 
-	inCorner := func(x, y, cx, cy int) bool {
-		dx, dy := x-cx, y-cy
-		return dx*dx+dy*dy > 49
-	}
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			rounded := !(inCorner(x, y, 7, 7) || inCorner(x, y, 24, 7) ||
-				inCorner(x, y, 7, 24) || inCorner(x, y, 24, 24))
-			if rounded {
-				img.Set(x, y, accent)
-			}
-		}
-	}
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx, dy := x-16, y-14
-			if dx*dx+dy*dy <= 22 && dy >= -3 { // 火焰圆头
-				img.Set(x, y, white)
-			}
-			if y >= 13 && y <= 25 { // 火焰下摆
-				half := (25 - y) / 2
-				if half > 0 {
-					if dx < 0 {
-						dx = -dx
-					}
-					if dx <= half {
-						img.Set(x, y, white)
-					}
-				}
-			}
-		}
-	}
+//go:embed icon-256.png
+var icon256PNG []byte
 
-	var pngBuf bytes.Buffer
-	_ = png.Encode(&pngBuf, img)
+// hiconFromPNG 用 CreateIconFromResourceEx 从 PNG 数据构建 HICON（Vista+）。
+func hiconFromPNG(png []byte) syscall.Handle {
+	h, _, _ := pTCreateIconFromRes.Call(
+		uintptr(unsafe.Pointer(&png[0])), uintptr(len(png)), 1, 0x00030000, 0, 0, 0)
+	return syscall.Handle(h)
+}
 
-	// ICONDIR + ICONDIRENTRY + PNG（Vista+ 支持 PNG 压缩的 ICO 条目）
-	ico := &bytes.Buffer{}
-	_ = binary.Write(ico, binary.LittleEndian, uint16(0))
-	_ = binary.Write(ico, binary.LittleEndian, uint16(1))
-	_ = binary.Write(ico, binary.LittleEndian, uint16(1))
-	ico.WriteByte(byte(size))
-	ico.WriteByte(byte(size))
-	ico.WriteByte(0)
-	ico.WriteByte(0)
-	_ = binary.Write(ico, binary.LittleEndian, uint16(1))
-	_ = binary.Write(ico, binary.LittleEndian, uint16(32))
-	_ = binary.Write(ico, binary.LittleEndian, uint32(pngBuf.Len()))
-	_ = binary.Write(ico, binary.LittleEndian, uint32(22))
-	_, _ = ico.Write(pngBuf.Bytes())
-	return ico.Bytes()
+// appIcons 窗口/托盘图标句柄（进程内缓存一次）。
+var (
+	appIconSmall syscall.Handle // 32px：托盘、窗口小图标
+	appIconLarge syscall.Handle // 256px：窗口大图标（Alt-Tab）
+	iconsLoaded  bool
+)
+
+func loadAppIcons() {
+	if iconsLoaded {
+		return
+	}
+	appIconSmall = hiconFromPNG(icon32PNG)
+	appIconLarge = hiconFromPNG(icon256PNG)
+	if appIconSmall == 0 {
+		h, _, _ := pTLoadIconW.Call(0, 32512)
+		appIconSmall = syscall.Handle(h)
+	}
+	if appIconLarge == 0 {
+		appIconLarge = appIconSmall
+	}
+	iconsLoaded = true
 }
