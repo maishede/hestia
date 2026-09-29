@@ -8,12 +8,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +27,12 @@ import (
 // runGUI 在主线程运行 WebView2 窗口（阻塞直至窗口关闭）。
 func runGUI(a *app) {
 	runtime.LockOSThread()
+	if exe, err := os.Executable(); err == nil {
+		if message, err := os.ReadFile(filepath.Join(updateDir(exe), "last-error.txt")); err == nil {
+			guiUpdater.fail(fmt.Errorf("上次更新失败：%s", strings.TrimSpace(string(message))))
+		}
+		go cleanupUpdateStages(exe)
+	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -32,7 +40,12 @@ func runGUI(a *app) {
 		a.shutdown()
 		return
 	}
-	srv := &http.Server{Handler: buildGUIMux(a), ReadHeaderTimeout: 5 * time.Second}
+	var w webview2.WebView
+	srv := &http.Server{Handler: buildGUIMux(a, func() {
+		if w != nil {
+			w.Dispatch(func() { w.Terminate() })
+		}
+	}), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() {
 		shutdownCtx := make(chan struct{})
@@ -44,7 +57,7 @@ func runGUI(a *app) {
 	}()
 
 	// WebView2 的用户数据也固定在 exe 同目录，不在系统盘留任何文件
-	w := webview2.NewWithOptions(webview2.WebViewOptions{
+	w = webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
 		DataPath:  filepath.Join(a.dataDir, "webview"),
@@ -68,7 +81,7 @@ func runGUI(a *app) {
 	a.shutdown()
 }
 
-func buildGUIMux(a *app) *http.ServeMux {
+func buildGUIMux(a *app, quit func()) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// 内嵌控制台页面（web/gui）
@@ -95,6 +108,34 @@ func buildGUIMux(a *app) *http.ServeMux {
 
 	mux.HandleFunc("/gui/api/state", func(w http.ResponseWriter, r *http.Request) {
 		jwt(w, guiState(a))
+	})
+	// Update operations stay on the desktop-only listener and require a same-origin POST.
+	updateRequest := func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPost || r.Header.Get("Origin") != "http://"+r.Host {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return false
+		}
+		return true
+	}
+	mux.HandleFunc("/gui/api/update/check", func(w http.ResponseWriter, r *http.Request) {
+		if !updateRequest(w, r) {
+			return
+		}
+		if _, err := guiUpdater.check(r.Context()); err != nil {
+			jerr(w, err.Error())
+			return
+		}
+		jwt(w, guiUpdater.snapshot())
+	})
+	mux.HandleFunc("/gui/api/update/install", func(w http.ResponseWriter, r *http.Request) {
+		if !updateRequest(w, r) {
+			return
+		}
+		if err := guiUpdater.start(quit); err != nil {
+			jerr(w, err.Error())
+			return
+		}
+		jwt(w, guiUpdater.snapshot())
 	})
 	mux.HandleFunc("/gui/api/toggle-service", func(w http.ResponseWriter, r *http.Request) {
 		if a.srv.Running() {
@@ -251,7 +292,8 @@ func guiState(a *app) map[string]any {
 	}
 	return map[string]any{
 		"running": a.srv.Running(), "urls": urls,
-		"port": c.Port, "autoStart": c.AutoStart,
+		"update": guiUpdater.snapshot(),
+		"port":   c.Port, "autoStart": c.AutoStart,
 		"ffmpeg": a.tc.FFmpegOK(), "ffmpegPath": a.tc.FFmpeg,
 		"scanning": a.store.AnyScanning(), "folders": folders, "media": media,
 		"libs": libJSON,

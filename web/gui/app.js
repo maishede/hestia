@@ -67,6 +67,22 @@ function render(s) {
   $('ffText').textContent = s.ffmpeg
     ? 'ffmpeg 已就绪（' + s.ffmpegPath + '）'
     : '未检测到 ffmpeg：HEVC/MKV 等格式无法转码，建议放到程序同目录或加入 PATH'
+  const update = s.update
+  $('currentVersion').textContent = 'v' + update.current
+  const updateMessages = {
+    idle: '尚未检查更新',
+    checking: '正在从 GitHub 检查最新版本…',
+    current: '已是最新版本',
+    available: `发现新版本 v${update.latest}，可直接下载安装`,
+    downloading: `正在下载并校验新版本… ${update.progress}%`,
+    restarting: '校验完成，正在重启到新版本…',
+    error: update.error || '更新失败',
+  }
+  $('updateText').textContent = updateMessages[update.status] || '更新状态未知'
+  $('btnCheckUpdate').disabled = update.status === 'checking' || update.status === 'downloading' || update.status === 'restarting'
+  $('btnInstallUpdate').hidden = update.status !== 'available'
+  $('updateProgress').hidden = update.status !== 'downloading'
+  $('updateProgressFill').style.width = update.progress + '%'
 }
 
 async function refresh() {
@@ -111,6 +127,23 @@ $('btnRescan').onclick = act(() => api('rescan').then(s => { toast('已开始重
 $('btnPort').onclick = act(() => api('port', { port: parseInt($('portInput').value, 10) }).then(s => { toast('端口已应用'); return s }))
 $('chkAuto').onchange = e => act(() => api('autostart', { enabled: e.target.checked }))()
 
+async function checkUpdate(auto = false) {
+  try {
+    await api('update/check')
+    await refresh()
+  } catch (e) {
+    await refresh()
+    if (!auto) toast(e.message, true)
+  }
+}
+$('btnCheckUpdate').onclick = () => checkUpdate(false)
+$('btnInstallUpdate').onclick = async () => {
+  try {
+    await api('update/install')
+    await refresh()
+  } catch (e) { toast(e.message, true) }
+}
+
 // 移除：两连击确认（第一次变为「确认?」，2.5 秒内再点生效）
 let removeTimer = null
 $('libList').addEventListener('click', e => {
@@ -137,6 +170,8 @@ $('pathInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnA
 
 refresh()
 setInterval(refresh, 1500)
+setTimeout(() => checkUpdate(true), 700)
+setInterval(() => checkUpdate(true), 6 * 60 * 60 * 1000)
 // 首个 state 到手即视为渲染完成
 const _firstRender = setInterval(() => { if (state) { clearInterval(_firstRender); signalReady() } }, 60)
 setTimeout(signalReady, 3000) // 兜底

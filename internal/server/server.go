@@ -19,7 +19,7 @@ import (
 	"hestia/internal/progress"
 )
 
-const Version = "0.3.6"
+const Version = "0.3.7"
 
 type Server struct {
 	cfg     *config.Manager
