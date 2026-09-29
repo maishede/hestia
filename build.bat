@@ -1,21 +1,25 @@
 @echo off
-rem Hestia Windows 构建脚本（GUI 版，双击 exe 弹出配置窗口，无控制台黑框）
-rem Go 查找顺序：PATH → D:\golang\bin → %USERPROFILE%\tools\go
+rem Build the Windows GUI executable without a console window.
+rem Find Go on PATH, in D:\golang, or in the user's tools directory.
 setlocal
-set GO=go
+cd /d "%~dp0"
+set "GO_EXE=go"
 where go >nul 2>nul
 if errorlevel 1 (
   if exist "D:\golang\bin\go.exe" (
-    set "GO=D:\golang\bin\go.exe"
+    set "GO_EXE=D:\golang\bin\go.exe"
   ) else if exist "%USERPROFILE%\tools\go\bin\go.exe" (
-    set "GO=%USERPROFILE%\tools\go\bin\go.exe"
+    set "GO_EXE=%USERPROFILE%\tools\go\bin\go.exe"
   ) else (
-    echo [错误] 未找到 Go 工具链，请安装到 D:\golang 或从 https://go.dev/dl/ 安装后加入 PATH
+    echo [ERROR] Go not found. Install it from https://go.dev/dl/ and add it to PATH.
     exit /b 1
   )
 )
 if not exist dist mkdir dist
-echo 使用 %GO% 构建中...
-%GO% build -trimpath -ldflags "-s -w -H windowsgui" -o dist\Hestia.exe .
-if errorlevel 1 ( echo [失败] & exit /b 1 )
-echo 构建完成: dist\Hestia.exe（双击打开配置窗口）
+echo Building with "%GO_EXE%"...
+"%GO_EXE%" build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" -o dist\Hestia.exe .
+if errorlevel 1 (
+  echo [ERROR] Build failed.
+  exit /b 1
+)
+echo Built: dist\Hestia.exe
