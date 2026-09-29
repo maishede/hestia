@@ -70,10 +70,10 @@ function render(s) {
   const update = s.update
   $('currentVersion').textContent = 'v' + update.current
   const updateMessages = {
-    idle: '尚未检查更新',
+    idle: '点击「检查更新」查看是否有新版本',
     checking: '正在从 GitHub 检查最新版本…',
     current: '已是最新版本',
-    available: `发现新版本 v${update.latest}，可直接下载安装`,
+    available: `发现新版本 v${update.latest}，建议下载安装`,
     downloading: `正在下载并校验新版本…${update.progress >= 0 ? ' ' + update.progress + '%' : ''}`,
     restarting: '校验完成，正在重启到新版本…',
     error: update.error || '更新失败',
@@ -127,16 +127,22 @@ $('btnRescan').onclick = act(() => api('rescan').then(s => { toast('已开始重
 $('btnPort').onclick = act(() => api('port', { port: parseInt($('portInput').value, 10) }).then(s => { toast('端口已应用'); return s }))
 $('chkAuto').onchange = e => act(() => api('autostart', { enabled: e.target.checked }))()
 
-async function checkUpdate(auto = false) {
+async function checkUpdate() {
+  $('btnCheckUpdate').disabled = true
+  $('updateText').textContent = '正在从 GitHub 检查最新版本…'
   try {
     await api('update/check')
     await refresh()
   } catch (e) {
     await refresh()
-    if (!auto) toast(e.message, true)
+    toast(e.message, true)
+  } finally {
+    if (!state || !['checking', 'downloading', 'restarting'].includes(state.update.status)) {
+      $('btnCheckUpdate').disabled = false
+    }
   }
 }
-$('btnCheckUpdate').onclick = () => checkUpdate(false)
+$('btnCheckUpdate').onclick = checkUpdate
 $('btnInstallUpdate').onclick = async () => {
   try {
     await api('update/install')
@@ -170,8 +176,6 @@ $('pathInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnA
 
 refresh()
 setInterval(refresh, 1500)
-setTimeout(() => checkUpdate(true), 700)
-setInterval(() => checkUpdate(true), 6 * 60 * 60 * 1000)
 // 首个 state 到手即视为渲染完成
 const _firstRender = setInterval(() => { if (state) { clearInterval(_firstRender); signalReady() } }, 60)
 setTimeout(signalReady, 3000) // 兜底
