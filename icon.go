@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-// 应用图标（icon-master.png 生成，2026-09-29）。
+// 应用图标：薄荷播放环，由 tools/update-icons.ps1 从 icon-master.png 导出。
 //
 //go:embed icon-32.png
 var icon32PNG []byte
