@@ -99,7 +99,11 @@ func (u *desktopUpdater) start(quit func()) error {
 		stage := filepath.Join(updateDir(exe), "Hestia-v"+release.Version+".exe")
 		err = u.client.Download(ctx, release, stage, func(done, total int64) {
 			u.mu.Lock()
-			u.state.Progress = int(done * 100 / total)
+			if total > 0 {
+				u.state.Progress = int(done * 100 / total)
+			} else {
+				u.state.Progress = -1
+			}
 			u.mu.Unlock()
 		})
 		if err != nil {

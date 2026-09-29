@@ -20,6 +20,7 @@ import (
 
 const (
 	latestURL    = "https://api.github.com/repos/maishede/hestia/releases/latest"
+	latestPage   = "https://github.com/maishede/hestia/releases/latest"
 	assetPrefix  = "/maishede/hestia/releases/download/"
 	maxRelease   = 2 << 20
 	maxBinary    = 150 << 20
@@ -105,7 +106,7 @@ func (c *Client) Check(ctx context.Context, current string) (Release, error) {
 		} `json:"assets"`
 	}
 	if err := c.getJSON(ctx, c.latestURL, &payload); err != nil {
-		return Release{}, err
+		return c.checkViaRedirect(ctx, current)
 	}
 	comparison, err := CompareVersions(payload.Tag, current)
 	if err != nil {
@@ -139,8 +140,49 @@ func (c *Client) Check(ctx context.Context, current string) (Release, error) {
 	return r, nil
 }
 
+// GitHub's unauthenticated REST API has a shared per-IP limit. The public
+// /releases/latest redirect supplies the stable tag when that limit is hit.
+func (c *Client) checkViaRedirect(ctx context.Context, current string) (Release, error) {
+	request, err := c.newRequest(ctx, latestPage)
+	if err != nil {
+		return Release{}, err
+	}
+	request.Method = http.MethodHead
+	response, err := c.http.Do(request)
+	if err != nil {
+		return Release{}, fmt.Errorf("无法检查 GitHub 最新版本: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return Release{}, fmt.Errorf("GitHub 最新版本页面返回 HTTP %d", response.StatusCode)
+	}
+	if response.Request == nil || response.Request.URL == nil {
+		return Release{}, errors.New("GitHub 未返回有效的最新版本地址")
+	}
+	u := response.Request.URL
+	const tagPrefix = "/maishede/hestia/releases/tag/"
+	if u.Scheme != "https" || !strings.EqualFold(u.Host, "github.com") || !strings.HasPrefix(u.EscapedPath(), tagPrefix) {
+		return Release{}, errors.New("GitHub 未返回有效的最新版本地址")
+	}
+	tag, err := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), tagPrefix))
+	if err != nil || strings.Contains(tag, "/") {
+		return Release{}, errors.New("GitHub 最新版本标签无效")
+	}
+	comparison, err := CompareVersions(tag, current)
+	if err != nil {
+		return Release{}, err
+	}
+	r := Release{Version: strings.TrimPrefix(tag, "v"), Tag: tag, URL: u.String(), Available: comparison > 0}
+	if r.Available {
+		base := "https://github.com" + assetPrefix + url.PathEscape(tag) + "/"
+		r.AssetURL = base + "Hestia.exe"
+		r.ChecksumURL = base + "SHA256SUMS.txt"
+	}
+	return r, nil
+}
+
 func (c *Client) Download(ctx context.Context, release Release, destination string, progress func(int64, int64)) error {
-	if !release.Available || !c.validAssetURL(release.AssetURL, release.Tag) || release.Size < 1 || release.Size > maxBinary {
+	if !release.Available || !c.validAssetURL(release.AssetURL, release.Tag) || release.Size < 0 || release.Size > maxBinary {
 		return errors.New("更新信息无效")
 	}
 	expected := release.Digest
@@ -183,13 +225,17 @@ func (c *Client) Download(ctx context.Context, release Release, destination stri
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载更新失败：HTTP %d", response.StatusCode)
 	}
+	expectedSize := release.Size
+	if expectedSize == 0 && response.ContentLength > 0 {
+		expectedSize = response.ContentLength
+	}
 	hash := sha256.New()
-	counting := &progressWriter{total: release.Size, callback: progress}
+	counting := &progressWriter{total: expectedSize, callback: progress}
 	n, err := io.Copy(io.MultiWriter(f, hash, counting), io.LimitReader(response.Body, maxBinary+1))
 	if err != nil {
 		return err
 	}
-	if n != release.Size || n > maxBinary {
+	if n == 0 || n > maxBinary || (expectedSize > 0 && n != expectedSize) {
 		return errors.New("下载文件大小与 Release 信息不一致")
 	}
 	if !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), expectedHash) {

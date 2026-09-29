@@ -111,3 +111,44 @@ func TestRejectsForeignAssetURL(t *testing.T) {
 		t.Fatal("foreign release asset should be rejected")
 	}
 }
+
+func TestCheckFallsBackWhenAPIRateLimited(t *testing.T) {
+	binary := []byte("MZ-test-binary")
+	hash := sha256.Sum256(binary)
+	checksum := []byte(hex.EncodeToString(hash[:]) + "  Hestia.exe\n")
+	client := &Client{
+		latestURL: latestURL, assetHost: "github.com", assetPrefix: assetPrefix,
+		http: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			status := http.StatusOK
+			body := []byte{}
+			header := make(http.Header)
+			switch r.URL.String() {
+			case latestURL:
+				status = http.StatusForbidden
+			case latestPage:
+				status = http.StatusFound
+				header.Set("Location", "https://github.com/maishede/hestia/releases/tag/v0.3.7")
+			case "https://github.com/maishede/hestia/releases/tag/v0.3.7":
+			case "https://github.com/maishede/hestia/releases/download/v0.3.7/SHA256SUMS.txt":
+				body = checksum
+			case "https://github.com/maishede/hestia/releases/download/v0.3.7/Hestia.exe":
+				body = binary
+			default:
+				t.Errorf("unexpected request: %s", r.URL)
+			}
+			return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
+		})},
+	}
+	release, err := client.Check(context.Background(), "0.3.6")
+	if err != nil || !release.Available || release.Size != 0 || release.Version != "0.3.7" {
+		t.Fatalf("fallback Check = %+v, %v", release, err)
+	}
+	destination := filepath.Join(t.TempDir(), "Hestia-v0.3.7.exe")
+	if err := client.Download(context.Background(), release, destination, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil || !bytes.Equal(got, binary) {
+		t.Fatalf("fallback download = %q, %v", got, err)
+	}
+}

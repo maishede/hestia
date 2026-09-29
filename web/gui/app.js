@@ -74,15 +74,15 @@ function render(s) {
     checking: '正在从 GitHub 检查最新版本…',
     current: '已是最新版本',
     available: `发现新版本 v${update.latest}，可直接下载安装`,
-    downloading: `正在下载并校验新版本… ${update.progress}%`,
+    downloading: `正在下载并校验新版本…${update.progress >= 0 ? ' ' + update.progress + '%' : ''}`,
     restarting: '校验完成，正在重启到新版本…',
     error: update.error || '更新失败',
   }
   $('updateText').textContent = updateMessages[update.status] || '更新状态未知'
   $('btnCheckUpdate').disabled = update.status === 'checking' || update.status === 'downloading' || update.status === 'restarting'
   $('btnInstallUpdate').hidden = update.status !== 'available'
-  $('updateProgress').hidden = update.status !== 'downloading'
-  $('updateProgressFill').style.width = update.progress + '%'
+  $('updateProgress').hidden = update.status !== 'downloading' || update.progress < 0
+  $('updateProgressFill').style.width = Math.max(0, update.progress) + '%'
 }
 
 async function refresh() {
