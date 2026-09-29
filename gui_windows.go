@@ -110,7 +110,9 @@ func buildGUIMux(a *app) *http.ServeMux {
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/add", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Path string `json:"path"` }
+		var b struct {
+			Path string `json:"path"`
+		}
 		if !body(w, r, &b) || b.Path == "" {
 			jerr(w, "请填写路径")
 			return
@@ -136,7 +138,9 @@ func buildGUIMux(a *app) *http.ServeMux {
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/remove", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ ID string `json:"id"` }
+		var b struct {
+			ID string `json:"id"`
+		}
 		if !body(w, r, &b) {
 			return
 		}
@@ -183,7 +187,9 @@ func buildGUIMux(a *app) *http.ServeMux {
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/port", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Port int `json:"port"` }
+		var b struct {
+			Port int `json:"port"`
+		}
 		if !body(w, r, &b) || b.Port < 1 || b.Port > 65535 {
 			jerr(w, "端口取值 1-65535")
 			return
@@ -198,7 +204,9 @@ func buildGUIMux(a *app) *http.ServeMux {
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/autostart", func(w http.ResponseWriter, r *http.Request) {
-		var b struct{ Enabled bool `json:"enabled"` }
+		var b struct {
+			Enabled bool `json:"enabled"`
+		}
 		if !body(w, r, &b) {
 			return
 		}

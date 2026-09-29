@@ -47,7 +47,7 @@ func DetectToolchain() Toolchain {
 	return tc
 }
 
-func (t Toolchain) FFmpegOK() bool   { return t.FFmpeg != "" }
+func (t Toolchain) FFmpegOK() bool  { return t.FFmpeg != "" }
 func (t Toolchain) FFprobeOK() bool { return t.FFprobe != "" }
 
 type ProbeResult struct {

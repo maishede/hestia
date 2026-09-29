@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/jpeg"
 	_ "image/gif"
+	"image/jpeg"
 	_ "image/png"
 	"net/http"
 	"os"
@@ -25,7 +25,7 @@ var streamMIME = map[string]string{
 	".mpeg": "video/mpeg", ".vob": "video/mpeg", ".3gp": "video/3gpp",
 	".ogv": "video/ogg", ".rm": "application/vnd.rn-realmedia",
 	".rmvb": "application/vnd.rn-realmedia-vbr",
-	".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jfif": "image/jpeg",
+	".jpg":  "image/jpeg", ".jpeg": "image/jpeg", ".jfif": "image/jpeg",
 	".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
 	".bmp": "image/bmp", ".avif": "image/avif", ".heic": "image/heic",
 }

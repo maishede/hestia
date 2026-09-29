@@ -11,29 +11,29 @@ import (
 )
 
 var (
-	tOle32              = syscall.NewLazyDLL("ole32.dll")
-	pTCoInitializeEx    = tOle32.NewProc("CoInitializeEx")
-	pTCoTaskMemFree     = tOle32.NewProc("CoTaskMemFree")
-	pTSHBrowseForFolder = tShell32.NewProc("SHBrowseForFolderW")
+	tOle32                = syscall.NewLazyDLL("ole32.dll")
+	pTCoInitializeEx      = tOle32.NewProc("CoInitializeEx")
+	pTCoTaskMemFree       = tOle32.NewProc("CoTaskMemFree")
+	pTSHBrowseForFolder   = tShell32.NewProc("SHBrowseForFolderW")
 	pTSHGetPathFromIDList = tShell32.NewProc("SHGetPathFromIDListW")
 )
 
 const (
-	bifReturnOnlyFSDirs = 0x0001
-	bifNewDialogStyle   = 0x0040
+	bifReturnOnlyFSDirs     = 0x0001
+	bifNewDialogStyle       = 0x0040
 	coinitApartmentThreaded = 0x2
-	maxPathW            = 32768
+	maxPathW                = 32768
 )
 
 type browseInfoW struct {
-	HwndOwner      syscall.Handle
-	PidlRoot       uintptr
-	DisplayName    uintptr
-	Title          uintptr
-	Flags          uint32
-	Callback       uintptr
-	LParam         uintptr
-	Image          int32
+	HwndOwner   syscall.Handle
+	PidlRoot    uintptr
+	DisplayName uintptr
+	Title       uintptr
+	Flags       uint32
+	Callback    uintptr
+	LParam      uintptr
+	Image       int32
 }
 
 // pickFolderDialog 弹出原生文件夹选择框；取消返回空串。

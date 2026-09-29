@@ -37,9 +37,9 @@ var (
 )
 
 const (
-	wmCloseTray    = 0x0010       // WM_CLOSE
-	wmTrayCallback = 0x8000 + 1   // WM_APP+1 托盘回调
-	wmSetIconT     = 0x0080       // WM_SETICON
+	wmCloseTray    = 0x0010     // WM_CLOSE
+	wmTrayCallback = 0x8000 + 1 // WM_APP+1 托盘回调
+	wmSetIconT     = 0x0080     // WM_SETICON
 	gwlpWndProc    = -4
 
 	nimAdd    = 0
@@ -125,7 +125,7 @@ func loadAppIcon() syscall.Handle {
 const wmShowFromSecond = 0x8000 + 2 // WM_APP+2
 
 // singleInstanceTaken 尝试持有单实例互斥体；已有实例时唤醒其窗口并返回 true
-//（本次启动静默退出——多次点击只会打开/唤起一次）。
+// （本次启动静默退出——多次点击只会打开/唤起一次）。
 // 在 main 最开始调用（任何窗口/服务创建之前）。
 func singleInstanceTaken() bool {
 	_, _, err := pTCreateMutexW.Call(0, 1, t16(`Local\HestiaSingleton`))

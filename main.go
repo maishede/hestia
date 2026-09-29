@@ -34,21 +34,21 @@ func mustWebFS() fs.FS {
 }
 
 type app struct {
-	cfgM   *config.Manager
-	store  *index.Store
-	tc     server.Toolchain
-	tr     *server.Transcoder
-	prog   *progress.Store
-	srv    *server.Server
-	logger *log.Logger
-	home   string
+	cfgM    *config.Manager
+	store   *index.Store
+	tc      server.Toolchain
+	tr      *server.Transcoder
+	prog    *progress.Store
+	srv     *server.Server
+	logger  *log.Logger
+	home    string
 	dataDir string
 
-	appliedEnabled  map[string]bool
-	appliedPort     int
-	appliedListen   string
-	appliedAuto     *bool
-	first           bool
+	appliedEnabled map[string]bool
+	appliedPort    int
+	appliedListen  string
+	appliedAuto    *bool
+	first          bool
 }
 
 func main() {

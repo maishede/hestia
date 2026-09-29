@@ -36,8 +36,8 @@ type Transcoder struct {
 	resolve     func(mediaID string) (string, error)
 	maxSessions int
 
-	stop     chan struct{}
-	stopped  sync.WaitGroup
+	stop    chan struct{}
+	stopped sync.WaitGroup
 }
 
 func NewTranscoder(ffmpeg, dataDir string, resolve func(string) (string, error)) *Transcoder {
@@ -95,7 +95,8 @@ func randSID() string {
 	return hex.EncodeToString(b)
 }
 
-// Start 为媒体创建转码会话，startSec 为起播偏移（秒）。
+// Start 为媒体创建会话：加锁段只做会话登记/驱逐，等待首分片在锁外进行，
+// 避免一个起播阻塞其他用户长达 30 秒。
 func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession, error) {
 	if t.ffmpeg == "" {
 		return nil, errors.New("未找到 ffmpeg，无法转码（可将 ffmpeg 放到程序同目录或加入 PATH）")
@@ -104,8 +105,8 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 		startSec = 0
 	}
 
+	// ---- 加锁段：驱逐最旧会话、创建进程、登记 ----
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if len(t.sessions) >= t.maxSessions {
 		var oldest *TranscodeSession
 		for _, s := range t.sessions {
@@ -119,11 +120,13 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 	}
 	abs, err := t.resolve(mediaID)
 	if err != nil {
+		t.mu.Unlock()
 		return nil, err
 	}
 	sid := randSID()
 	dir := filepath.Join(t.dataDir, "transcode", sid)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.mu.Unlock()
 		return nil, err
 	}
 	args := []string{
@@ -145,6 +148,7 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		_ = os.RemoveAll(dir)
+		t.mu.Unlock()
 		return nil, err
 	}
 	s := &TranscodeSession{
@@ -154,8 +158,9 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 	}
 	go func() { s.done <- cmd.Wait() }()
 	t.sessions[sid] = s
+	t.mu.Unlock()
 
-	// 等待首个 playlist 落盘（首个分片完成）
+	// ---- 锁外段：等待首个 playlist 落盘 ----
 	playlist := filepath.Join(dir, "index.m3u8")
 	deadline := time.After(30 * time.Second)
 	for {
@@ -168,7 +173,9 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 			if _, statErr := os.Stat(playlist); statErr == nil {
 				return s, nil
 			}
+			t.mu.Lock()
 			delete(t.sessions, sid)
+			t.mu.Unlock()
 			tail := stderr.String()
 			if len(tail) > 400 {
 				tail = tail[len(tail)-400:]
@@ -180,7 +187,9 @@ func (t *Transcoder) Start(mediaID string, startSec float64) (*TranscodeSession,
 			return nil, fmt.Errorf("转码异常结束: %s", tail)
 		case <-time.After(300 * time.Millisecond):
 		case <-deadline:
+			t.mu.Lock()
 			t.killLocked(s, true)
+			t.mu.Unlock()
 			return nil, errors.New("转码启动超时")
 		}
 	}

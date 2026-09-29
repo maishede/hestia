@@ -7,6 +7,7 @@ import (
 )
 
 // 应用图标（icon-master.png 生成，2026-09-29）。
+//
 //go:embed icon-32.png
 var icon32PNG []byte
 

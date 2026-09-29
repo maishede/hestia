@@ -28,15 +28,15 @@ func (k Kind) String() string {
 }
 
 type Media struct {
-	ID       string
-	FolderID string
+	ID        string
+	FolderID  string
 	LibraryID string
-	RelPath  string
-	Name     string
-	Ext      string
-	Kind     Kind
-	Size     int64
-	Mtime    time.Time
+	RelPath   string
+	Name      string
+	Ext       string
+	Kind      Kind
+	Size      int64
+	Mtime     time.Time
 
 	// 外挂字幕（同目录同名或同名.语言.srt/ass）
 	SubIDs []string
@@ -284,14 +284,14 @@ var newWithin = 14 * 24 * time.Hour
 func isNew(mtime time.Time) bool { return time.Since(mtime) < newWithin }
 
 type FolderSummary struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Cover     string    `json:"cover"`
-	VideoCount int      `json:"videoCount"`
-	ImageCount int      `json:"imageCount"`
-	SubVideos int       `json:"subVideos"`
-	Mtime     time.Time `json:"mtime"`
-	IsNew     bool      `json:"isNew,omitempty"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Cover      string    `json:"cover"`
+	VideoCount int       `json:"videoCount"`
+	ImageCount int       `json:"imageCount"`
+	SubVideos  int       `json:"subVideos"`
+	Mtime      time.Time `json:"mtime"`
+	IsNew      bool      `json:"isNew,omitempty"`
 }
 
 // 封面统一走文件夹端点：有图重定向原图（带缩放），无图由服务端 ffmpeg 抽帧。
@@ -458,15 +458,15 @@ func (s *Store) Breadcrumb(folderID string) []Crumb {
 }
 
 type MediaSummary struct {
-	ID       string    `json:"id"`
-	Kind     string    `json:"kind"`
-	Name     string    `json:"name"`
-	Size     int64     `json:"size"`
-	Mtime    time.Time `json:"mtime"`
-	Duration float64   `json:"duration,omitempty"`
-	CardCover string   `json:"cardCover,omitempty"`
-	IsNew    bool      `json:"isNew,omitempty"`
-	Subs     int       `json:"subs,omitempty"`
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	Name      string    `json:"name"`
+	Size      int64     `json:"size"`
+	Mtime     time.Time `json:"mtime"`
+	Duration  float64   `json:"duration,omitempty"`
+	CardCover string    `json:"cardCover,omitempty"`
+	IsNew     bool      `json:"isNew,omitempty"`
+	Subs      int       `json:"subs,omitempty"`
 }
 
 func mediaSummary(m *Media) MediaSummary {
