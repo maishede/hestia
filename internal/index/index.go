@@ -56,6 +56,7 @@ type Media struct {
 	EmbeddedSubs []SubStream
 
 	CardCoverID string // 同名封面图（视频卡片用）
+	CoverOf     string // 反向标记：该图片已并入某视频卡片做海报（列表/搜索不再单独显示）
 }
 
 // Subtitle 外挂字幕文件（不进浏览网格，仅随视频提供）。
@@ -523,10 +524,13 @@ func (s *Store) Children(folderID string, page, size int, sortKey, order string)
 	sortFolderSummaries(res.Folders, sortKey, order)
 
 	mediaIDs := s.childMedia[folderID]
-	total := len(mediaIDs)
-	sums := make([]MediaSummary, 0, total)
+	sums := make([]MediaSummary, 0, len(mediaIDs))
 	for _, id := range mediaIDs {
-		sums = append(sums, mediaSummary(s.media[id]))
+		m := s.media[id]
+		if m.Kind == KindImage && m.CoverOf != "" {
+			continue // 已并入视频卡片做海报的图片不再单独列出
+		}
+		sums = append(sums, mediaSummary(m))
 	}
 	sortMediaSummaries(sums, sortKey, order)
 	res.Media = paginate(sums, page, size)

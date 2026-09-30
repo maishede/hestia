@@ -91,6 +91,9 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 		}
 	}
 	for _, m := range s.media {
+		if m.Kind == KindImage && m.CoverOf != "" {
+			continue // 已并入视频卡片做海报的图片不参与搜索
+		}
 		if ok, sc := matchItem(strings.ToLower(m.Name), m.PyFull, m.PyInit, tokens); ok {
 			it := SearchItem{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime.Unix(), Duration: m.Duration}
 			if f, ok := s.folders[m.FolderID]; ok {

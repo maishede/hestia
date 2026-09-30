@@ -234,11 +234,12 @@ func (s *Store) walkLibrary(libID, root string) error {
 		for _, img := range a.images {
 			byStem[strings.ToLower(img.Name)] = img
 		}
-		// 字幕挂到同名视频（或 "视频名.语言.srt" 前缀匹配）
+		// 字幕挂到同名视频（或 "视频名.语言.srt" 前缀匹配）；同名图片并入视频卡片做海报
 		for _, v := range a.videos {
 			lv := strings.ToLower(v.Name)
 			if img, ok := byStem[lv]; ok {
 				v.CardCoverID = img.ID
+				img.CoverOf = v.ID
 			}
 			for _, sub := range a.subs {
 				ls := strings.ToLower(sub.Name)
@@ -248,9 +249,33 @@ func (s *Store) walkLibrary(libID, root string) error {
 			}
 			sort.Strings(v.SubIDs)
 		}
+		// 单视频文件夹：poster/cover/folder/fanart 命名的图片视为该片海报，同样并入视频卡片
+		if len(a.videos) == 1 && a.videos[0].CardCoverID == "" {
+			v := a.videos[0]
+			var cand *Media
+			candRank := 9
+			for _, img := range a.images {
+				if img.CoverOf != "" {
+					continue
+				}
+				if r := coverRank(img.Name); r < candRank || (r == candRank && cand != nil && NaturalLess(img.Name, cand.Name)) {
+					cand, candRank = img, r
+				}
+			}
+			if cand != nil {
+				v.CardCoverID = cand.ID
+				cand.CoverOf = v.ID
+			}
+		}
 		if df, ok := drafts[rel]; ok { // 库根层媒体无文件夹节点
 			df.f.VideoCount = len(a.videos)
-			df.f.ImageCount = len(a.images)
+			visible := 0
+			for _, img := range a.images {
+				if img.CoverOf == "" {
+					visible++
+				}
+			}
+			df.f.ImageCount = visible // 已并入视频卡片的封面图不计入列表展示数
 			if cover != nil {
 				df.f.CoverID = cover.ID
 				df.hasCover = true
