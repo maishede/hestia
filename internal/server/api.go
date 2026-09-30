@@ -67,12 +67,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// ensureProbed 返回带探测信息的媒体（必要时同步 ffprobe），失败时已写响应并返回零值。
+// ensureProbed 返回带探测信息的媒体（必要时同步 ffprobe，仅视频），失败时已写响应并返回零值。
 func (s *Server) ensureProbed(w http.ResponseWriter, r *http.Request, id string) (index.Media, string) {
 	abs, m, err := s.store.ResolveMedia(id)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "媒体不存在")
 		return index.Media{}, ""
+	}
+	// 图片会被 ffprobe 当成单帧视频（时长 0.024s 之类），导致前端误显示 0:00，跳过
+	if m.Kind != index.KindVideo {
+		return m, abs
 	}
 	if !m.Probed && s.tc.FFprobeOK() {
 		lib, _ := s.store.GetLibrary(m.LibraryID)

@@ -63,6 +63,7 @@ func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, 
 	s.mux.HandleFunc("GET /api/media/{id}", s.handleMediaDetail)
 	s.mux.HandleFunc("GET /api/media/{id}/stream", s.handleStream)
 	s.mux.HandleFunc("GET /api/media/{id}/image", s.handleImage)
+	s.mux.HandleFunc("GET /api/media/{id}/thumb", s.handleMediaThumb)
 	s.mux.HandleFunc("POST /api/media/{id}/transcode", s.handleTranscodeStart)
 	s.mux.HandleFunc("GET /api/transcode/{sid}/{file}", s.handleTranscodeFile)
 	s.mux.HandleFunc("DELETE /api/transcode/{sid}", s.handleTranscodeStop)

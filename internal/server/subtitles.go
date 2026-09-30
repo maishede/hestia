@@ -266,3 +266,66 @@ func serveJPEG(w http.ResponseWriter, b []byte) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(b)
 }
+
+// handleMediaThumb 视频卡片缩略图：优先取已缓存抽帧，否则用 ffmpeg 抽 3 秒处一帧。
+func (s *Server) handleMediaThumb(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	abs, m, err := s.store.ResolveMedia(id)
+	if err != nil || m.Kind != index.KindVideo {
+		errJSON(w, http.StatusNotFound, "视频不存在")
+		return
+	}
+	if !s.tc.FFmpegOK() {
+		errJSON(w, http.StatusServiceUnavailable, "未找到 ffmpeg")
+		return
+	}
+	cacheDir := filepath.Join(s.dataDir, "cache", "thumb")
+	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", id, m.Size, m.Mtime.Unix()))
+	if b, err := os.ReadFile(cache); err == nil {
+		serveJPEG(w, b)
+		return
+	}
+	_ = os.MkdirAll(cacheDir, 0o755)
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	if b, err := os.ReadFile(cache); err == nil { // 双重检查
+		serveJPEG(w, b)
+		return
+	}
+	run := func(seek string) error {
+		args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+		if seek != "" {
+			args = append(args, "-ss", seek)
+		}
+		args = append(args, "-i", abs, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-y", cache)
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, s.tc.FFmpeg, args...)
+		hideChildWindow(cmd)
+		return cmd.Run()
+	}
+	// 时长不足 3 秒的短视频直接取首帧
+	seek := "3"
+	if m.Duration > 0 && m.Duration < 3 {
+		seek = ""
+	}
+	if err := run(seek); err != nil {
+		_ = os.Remove(cache)
+		if seek != "" { // 3 秒处抽帧失败（片头过短/损坏）时退回首帧
+			if err2 := run(""); err2 != nil {
+				_ = os.Remove(cache)
+				errJSON(w, http.StatusNotFound, "缩略图生成失败")
+				return
+			}
+		} else {
+			errJSON(w, http.StatusNotFound, "缩略图生成失败")
+			return
+		}
+	}
+	b, err := os.ReadFile(cache)
+	if err != nil {
+		errJSON(w, http.StatusNotFound, "缩略图生成失败")
+		return
+	}
+	serveJPEG(w, b)
+}

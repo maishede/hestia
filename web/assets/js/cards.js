@@ -28,10 +28,11 @@ export function mediaCard(m) {
     </a>`
   }
   const href = m.kind === 'image' ? `#/image/${m.id}` : `#/play/${m.id}`
+  const ph = `<div class="cover-ph">${icon(m.kind === 'image' ? 'image' : 'film', 32)}</div>`
   const cover = m.cardCover
-    ? `<img loading="lazy" src="${esc(m.cardCover)}" alt="" onerror="this.style.display='none'">`
-    : `<div class="cover-ph">${icon(m.kind === 'image' ? 'image' : 'film', 32)}</div>`
-  const dur = m.duration ? `<span class="dur">${fmtDur(m.duration)}</span>` : ''
+    ? `${ph}<img loading="lazy" src="${esc(m.cardCover)}" alt="" onerror="this.style.display='none'">`
+    : ph
+  const dur = m.kind === 'video' && m.duration > 1 ? `<span class="dur">${fmtDur(m.duration)}</span>` : ''
   const newBadge = m.isNew ? `<span class="badge new">新</span>` : ''
   const playHint = m.kind === 'video' ? `<span class="play-hint">${icon('play', 22)}</span>` : ''
   const metaBits = [m.where, fmtSize(m.size), m.mtime ? fmtDateLocal(m.mtime) : '', m.subs ? 'CC' : ''].filter(Boolean).join(' · ')
