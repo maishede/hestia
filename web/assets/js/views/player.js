@@ -2,7 +2,7 @@
 import { api, post } from '../api.js'
 import { icon, fmtDur, toast, clamp, esc, debounce } from '../util.js'
 
-const SPEEDS = [0.5, 1, 1.5, 2, 2.5, 3, 4, 5]
+const SPEEDS = [0.5, 1, 1.5, 2]
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
@@ -141,12 +141,12 @@ export async function PlayerView(app, id) {
     root.classList.remove('controls-hidden')
     clearTimeout(controlsTimer)
     controlsTimer = setTimeout(() => {
-      if (!vid.paused && speedMenu.hidden && resumeTip.hidden) root.classList.add('controls-hidden')
+      if (!vid.paused && speedMenu.hidden && ccMenu.hidden && resumeTip.hidden) root.classList.add('controls-hidden')
     }, 3000)
   }
   function toggleControls() {
     if (root.classList.contains('controls-hidden')) showControls()
-    else { root.classList.add('controls-hidden'); speedMenu.hidden = true }
+    else { root.classList.add('controls-hidden'); speedMenu.hidden = true; ccMenu.hidden = true }
   }
 
   // ---------- 播放源 ----------
@@ -358,18 +358,30 @@ export async function PlayerView(app, id) {
     }
   }
 
-  // 倍速菜单
+  // 倍速菜单（点击按钮弹出，选中或点击其他区域后收起）
   speedMenu.innerHTML = SPEEDS.map(s => `<button data-s="${s}" class="${s === 1 ? 'active' : ''}">${s}x</button>`).join('')
   speedMenu.addEventListener('click', e => {
     const b = e.target.closest('button')
     if (!b) return
     setRate(parseFloat(b.dataset.s))
     speedMenu.hidden = true
+    showControls()
   })
+  function closeMenus() {
+    speedMenu.hidden = true
+    ccMenu.hidden = true
+    showControls()
+  }
+  // 点击菜单/按钮以外的任意位置都收起（对齐主流播放器行为）
+  root.addEventListener('click', e => {
+    if (speedMenu.hidden && ccMenu.hidden) return
+    if (e.target.closest('#speed-menu, #btn-speed, #cc-menu, #btn-cc')) return
+    closeMenus()
+  }, true)
   $('#btn-speed').addEventListener('click', e => {
     e.stopPropagation()
-    speedMenu.hidden = !speedMenu.hidden
     ccMenu.hidden = true
+    speedMenu.hidden = !speedMenu.hidden
     showControls()
   })
 
@@ -430,6 +442,7 @@ export async function PlayerView(app, id) {
       if (!b) return
       setCC(parseInt(b.dataset.i, 10))
       ccMenu.hidden = true
+      showControls()
     })
   }
 
@@ -556,7 +569,7 @@ export async function PlayerView(app, id) {
 
   // 鼠标移动唤出控制栏
   root.addEventListener('pointermove', e => {
-    if (e.pointerType === 'mouse' && e.target.closest('.p-top, .p-bottom, .speed-menu') === null) showControls()
+    if (e.pointerType === 'mouse' && e.target.closest('.p-top, .p-bottom, .speed-menu, .sub-menu') === null) showControls()
   })
 
   // ---------- 键盘 ----------
@@ -571,7 +584,7 @@ export async function PlayerView(app, id) {
       case 'ArrowUp': if (!isIOS) { vid.volume = clamp(vid.volume + 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'ArrowDown': if (!isIOS) { vid.volume = clamp(vid.volume - 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'f': toggleFS(); break
-      case 'Escape': speedMenu.hidden = true; break
+      case 'Escape': speedMenu.hidden = true; ccMenu.hidden = true; break
     }
   }
   document.addEventListener('keydown', onKey)
