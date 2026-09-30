@@ -258,7 +258,7 @@ func (s *Store) walkLibrary(libID, root string) error {
 		}
 	}
 
-	// 递归视频数 + 子层封面继承（自底向上）
+	// 递归视频/图片数 + 子层封面继承（自底向上）
 	rels := make([]string, 0, len(drafts))
 	for rel := range drafts {
 		rels = append(rels, rel)
@@ -268,15 +268,17 @@ func (s *Store) walkLibrary(libID, root string) error {
 	})
 	for _, rel := range rels {
 		df := drafts[rel]
-		sum := df.f.VideoCount
+		sum, sumImg := df.f.VideoCount, df.f.ImageCount
 		for _, c := range df.childs {
 			sum += c.f.SubVideos
+			sumImg += c.f.SubImages
 			if !df.hasCover && c.hasCover {
 				df.f.CoverID = c.f.CoverID
 				df.hasCover = true
 			}
 		}
 		df.f.SubVideos = sum
+		df.f.SubImages = sumImg
 	}
 
 	// 拼音键

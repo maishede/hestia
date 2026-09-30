@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -88,9 +89,13 @@ type Folder struct {
 	VideoCount int
 	ImageCount int
 	SubVideos  int // 含子层视频总数
+	SubImages  int // 含子层图片总数
 	PyFull     string
 	PyInit     string
 }
+
+// treeEmpty 报告文件夹整棵子树是否既无视频也无图片（空文件夹不参与列表/搜索）。
+func (f *Folder) treeEmpty() bool { return f.SubVideos == 0 && f.SubImages == 0 }
 
 type LibraryState struct {
 	ID       string    `json:"id"`
@@ -306,13 +311,13 @@ func (s *Store) folderSummary(f *Folder) FolderSummary {
 	return sum
 }
 
-// Roots 返回所有母文件夹（各库第一层）。
+// Roots 返回所有母文件夹（各库第一层），空文件夹（整树无视频且无图片）不显示。
 func (s *Store) Roots(sortKey, order string) []FolderSummary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out = make([]FolderSummary, 0, 16)
 	for _, f := range s.folders {
-		if f.ParentID == "" {
+		if f.ParentID == "" && !f.treeEmpty() {
 			out = append(out, s.folderSummary(f))
 		}
 	}
@@ -470,9 +475,20 @@ type MediaSummary struct {
 }
 
 func mediaSummary(m *Media) MediaSummary {
-	sum := MediaSummary{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime, Duration: m.Duration, IsNew: isNew(m.Mtime), Subs: len(m.SubIDs)}
-	if m.CardCoverID != "" {
+	sum := MediaSummary{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime, IsNew: isNew(m.Mtime), Subs: len(m.SubIDs)}
+	switch {
+	case m.CardCoverID != "":
 		sum.CardCover = "/api/media/" + m.CardCoverID + "/image?w=480"
+	case m.Kind == KindImage:
+		// 图片卡片直接用自身做封面
+		sum.CardCover = "/api/media/" + m.ID + "/image?w=480"
+	default:
+		// 视频没有同名封面图时回退到 ffmpeg 抽帧缩略图（服务端无 ffmpeg 时返回 404，前端显示占位图标）
+		// v= 修改时间用于文件更换后失效缓存
+		sum.CardCover = "/api/media/" + m.ID + "/thumb?v=" + strconv.FormatInt(m.Mtime.Unix(), 10)
+	}
+	if m.Kind == KindVideo {
+		sum.Duration = m.Duration
 	}
 	return sum
 }
@@ -499,7 +515,9 @@ func (s *Store) Children(folderID string, page, size int, sortKey, order string)
 	res := ChildrenResult{Breadcrumb: s.breadcrumbLocked(folderID), Folders: []FolderSummary{}}
 	if ids, ok := s.childFolders[folderID]; ok {
 		for _, id := range ids {
-			res.Folders = append(res.Folders, s.folderSummary(s.folders[id]))
+			if f := s.folders[id]; !f.treeEmpty() {
+				res.Folders = append(res.Folders, s.folderSummary(f))
+			}
 		}
 	}
 	sortFolderSummaries(res.Folders, sortKey, order)

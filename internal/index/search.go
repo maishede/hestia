@@ -83,6 +83,9 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 	var hits []scoredHit
 	s.mu.RLock()
 	for _, f := range s.folders {
+		if f.treeEmpty() {
+			continue
+		}
 		if ok, sc := matchItem(strings.ToLower(f.Name), f.PyFull, f.PyInit, tokens); ok {
 			hits = append(hits, scoredHit{SearchItem{ID: f.ID, Kind: "folder", Name: f.Name, Where: s.whereLocked(f.ID)}, sc})
 		}
