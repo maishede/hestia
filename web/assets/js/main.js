@@ -14,9 +14,11 @@ const routes = [
 ]
 
 let current = null
+let routeGeneration = 0
 const app = document.getElementById('app')
 
 async function route() {
+  const generation = ++routeGeneration
   let hash = location.hash || '#/'
   for (const r of routes) {
     const m = hash.match(r.re)
@@ -30,8 +32,16 @@ async function route() {
       window.scrollTo(0, 0)
       document.getElementById('searchInput').blur()
       try {
-        current = await r.view(app, ...m.slice(1))
+        const view = r.view === PlayerView
+          ? await r.view(app, ...m.slice(1), () => generation === routeGeneration)
+          : await r.view(app, ...m.slice(1))
+        if (generation !== routeGeneration) {
+          if (view && view.destroy) view.destroy()
+          return
+        }
+        current = view
       } catch (e) {
+        if (generation !== routeGeneration) return
         console.error(e)
         app.innerHTML = `<div class="empty-state"><p>加载失败：${e.message}</p><p class="hint">请刷新重试</p></div>`
       }

@@ -1,19 +1,23 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"hestia/internal/index"
 	"hestia/internal/progress"
 )
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, status int, v any) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	return json.NewEncoder(w).Encode(v)
 }
 
 func errJSON(w http.ResponseWriter, status int, msg string) {
@@ -132,32 +136,70 @@ func (s *Server) handleMediaDetail(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleTranscodeReserve(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, _, err := s.store.ResolveMedia(id); err != nil {
+		errJSON(w, http.StatusNotFound, "媒体不存在")
+		return
+	}
+	sid, err := s.tr.Reserve(id)
+	if err != nil {
+		errJSON(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	if r.Context().Err() != nil {
+		s.tr.Stop(sid)
+		return
+	}
+	if err := writeJSON(w, http.StatusOK, map[string]string{"sessionId": sid}); err != nil {
+		s.tr.Stop(sid)
+	}
+}
+
 func (s *Server) handleTranscodeStart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Start float64 `json:"start"`
+		Start     float64 `json:"start"`
+		SessionID string  `json:"sessionId"`
 	}
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			errJSON(w, http.StatusBadRequest, "请求格式错误")
+			return
+		}
 	}
 	if _, _, err := s.store.ResolveMedia(id); err != nil {
 		errJSON(w, http.StatusNotFound, "媒体不存在")
 		return
 	}
-	sess, err := s.tr.Start(id, body.Start)
+	sess, err := s.tr.Start(r.Context(), id, body.Start, body.SessionID)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if errors.Is(err, errReservationGone) || errors.Is(err, errTranscodeStopped) {
+			errJSON(w, http.StatusGone, err.Error())
+			return
+		}
 		errJSON(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	if r.Context().Err() != nil {
+		s.tr.Stop(sess.ID)
+		return
+	}
+	if err := writeJSON(w, http.StatusOK, map[string]any{
 		"sessionId": sess.ID,
 		"url":       "/api/transcode/" + sess.ID + "/index.m3u8",
 		"start":     sess.Start,
-	})
+	}); err != nil {
+		s.tr.Stop(sess.ID)
+	}
 }
 
 func (s *Server) handleTranscodeFile(w http.ResponseWriter, r *http.Request) {
-	p, err := s.tr.Serve(r.PathValue("sid"), r.PathValue("file"))
+	sid, name := r.PathValue("sid"), r.PathValue("file")
+	p, err := s.tr.Serve(sid, name)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "转码会话不存在或已结束")
 		return
@@ -168,15 +210,68 @@ func (s *Server) handleTranscodeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	st, _ := f.Stat()
-	name := r.PathValue("file")
-	ct := "video/mp2t"
-	if len(name) >= 5 && name[len(name)-5:] == ".m3u8" {
-		ct = "application/vnd.apple.mpegurl"
-		w.Header().Set("Cache-Control", "no-cache")
+	if name == "index.m3u8" {
+		manifest, err := io.ReadAll(f)
+		if err != nil {
+			errJSON(w, http.StatusInternalServerError, "无法读取转码清单")
+			return
+		}
+		// 清单尚未结束时，客户端也应从本次转码的起点播放。
+		if first, rest, ok := bytes.Cut(manifest, []byte("\n")); ok && string(bytes.TrimSuffix(first, []byte("\r"))) == "#EXTM3U" {
+			manifest = append([]byte("#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n"), rest...)
+		}
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-store")
+		s.serveTranscodeContent(w, r, sid, name, time.Time{}, bytes.NewReader(manifest))
+		return
 	}
-	w.Header().Set("Content-Type", ct)
-	http.ServeContent(w, r, name, st.ModTime(), f)
+	st, err := f.Stat()
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, "无法读取转码分片")
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp2t")
+	s.serveTranscodeContent(w, r, sid, name, st.ModTime(), f)
+}
+
+func (s *Server) serveTranscodeContent(w http.ResponseWriter, r *http.Request, sid, name string, modified time.Time, content io.ReadSeeker) {
+	if r.Method != http.MethodGet {
+		http.ServeContent(w, r, name, modified, content)
+		return
+	}
+	response := &transcodeReadResponse{ResponseWriter: w}
+	http.ServeContent(response, r, name, modified, content)
+	if (response.status == http.StatusOK || response.status == http.StatusPartialContent) &&
+		response.written > 0 && !response.failed && r.Context().Err() == nil {
+		s.tr.markRead(sid)
+	}
+}
+
+type transcodeReadResponse struct {
+	http.ResponseWriter
+	status  int
+	written int64
+	failed  bool
+}
+
+func (w *transcodeReadResponse) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *transcodeReadResponse) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	w.written += int64(n)
+	w.failed = w.failed || err != nil || n != len(data)
+	return n, err
+}
+
+// Preserve the underlying HTTP writer's fast path for file responses.
+func (w *transcodeReadResponse) ReadFrom(r io.Reader) (int64, error) {
+	n, err := io.Copy(w.ResponseWriter, r)
+	w.written += n
+	w.failed = w.failed || err != nil
+	return n, err
 }
 
 func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {

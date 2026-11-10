@@ -24,6 +24,13 @@ import (
 	"hestia/internal/config"
 )
 
+func runApp(a *app) {
+	if err := a.srv.StartListener(); err != nil {
+		a.logger.Printf("服务自启失败（可在窗口中手动启动）: %v", err)
+	}
+	runGUI(a)
+}
+
 // runGUI 在主线程运行 WebView2 窗口（阻塞直至窗口关闭）。
 func runGUI(a *app) {
 	runtime.LockOSThread()

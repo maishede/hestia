@@ -1,16 +1,43 @@
 // 播放器页：手势 + 倍速 + 断点续播 + 转码兜底
 import { api, post } from '../api.js'
-import { icon, fmtDur, toast, clamp, esc, debounce } from '../util.js'
+import { icon, fmtDur, toast, clamp, esc } from '../util.js'
 
-const SPEEDS = [0.5, 1, 1.5, 2]
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
-export async function PlayerView(app, id) {
+let xgLoader = null
+function ensurePlayer() {
+  if (window.Player) return Promise.resolve(window.Player)
+  if (!xgLoader) xgLoader = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = '/assets/js/vendor/xgplayer.min.js'
+    script.onload = () => window.Player ? resolve(window.Player) : reject(new Error('播放器加载失败'))
+    script.onerror = () => reject(new Error('播放器加载失败'))
+    document.head.appendChild(script)
+  }).catch(error => { xgLoader = null; throw error })
+  return xgLoader
+}
+
+let hlsLoader = null
+function ensureHls() {
+  if (window.Hls) return Promise.resolve(window.Hls)
+  if (!hlsLoader) hlsLoader = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = '/assets/js/vendor/hls.min.js'
+    script.onload = () => window.Hls ? resolve(window.Hls) : reject(new Error('hls.js 加载失败'))
+    script.onerror = () => { script.remove(); reject(new Error('hls.js 加载失败')) }
+    document.head.appendChild(script)
+  }).catch(error => { hlsLoader = null; throw error })
+  return hlsLoader
+}
+
+export async function PlayerView(app, id, isCurrent = () => true) {
   document.body.classList.add('player-mode')
-  const meta = await api(`/api/media/${id}`).catch(e => {
-    throw new Error(e.message || '视频不存在或已被移除')
-  })
+  const [meta, XGPlayer] = await Promise.all([
+    api(`/api/media/${id}`).catch(e => { throw new Error(e.message || '视频不存在或已被移除') }),
+    ensurePlayer(),
+  ])
+  if (!isCurrent()) return null
   if (!meta || !meta.stream) throw new Error('视频信息加载失败，请返回重试')
 
   // 字幕轨道清单（外挂 + 内嵌文本轨）
@@ -32,7 +59,7 @@ export async function PlayerView(app, id) {
   const root = document.createElement('div')
   root.className = 'player controls-on loading'
   root.innerHTML = `
-    <video playsinline webkit-playsinline preload="auto"></video>
+    <div id="xg-player"></div>
     <div id="gesture"></div>
     <div class="hud" id="hud"><span id="hud-ico"></span><span class="hud-text" id="hud-text"></span><div class="hud-bar" id="hud-bar" style="display:none"><i id="hud-bar-i"></i></div></div>
     <div class="p-top">
@@ -50,21 +77,7 @@ export async function PlayerView(app, id) {
         </div>
         <span class="time" id="t-dur">--:--</span>
       </div>
-      <div class="ctl-row">
-        ${meta.prev ? `<button class="pbtn" id="btn-prev" title="上一个">${icon('back', 17)}</button>` : ''}
-        <button class="pbtn" id="btn-play" title="播放/暂停">${icon('play', 22)}</button>
-        ${meta.next ? `<button class="pbtn" id="btn-next" title="下一个">${icon('fwd', 17)}</button>` : ''}
-        <span class="spacer"></span>
-        <button class="speed-label" id="btn-speed" title="倍速">1x</button>
-        <button class="pbtn ${ccTracks.length ? '' : 'hide'}" id="btn-cc" title="字幕">${icon('cc', 20)}</button>
-        ${isIOS ? '' : `<span class="vol-wrap">
-          <button class="pbtn" id="btn-mute" title="静音">${icon('vol', 19)}</button>
-          <input type="range" id="vol" min="0" max="1" step="0.01" value="1" title="音量">
-        </span>`}
-        <button class="pbtn" id="btn-fs" title="全屏">${icon('expand', 19)}</button>
-      </div>
     </div>
-    <div class="speed-menu" id="speed-menu" hidden></div>
     <div class="sub-menu" id="cc-menu" hidden></div>
     <div class="resume-tip" id="resume-tip" hidden>
       <span id="resume-text"></span>
@@ -80,20 +93,38 @@ export async function PlayerView(app, id) {
   app.appendChild(root)
 
   const $ = s => root.querySelector(s)
-  const vid = $('video'), gesture = $('#gesture'), hud = $('#hud')
+  const savedVolume = Number.parseFloat(localStorage.getItem('hestia.volume') ?? '1')
+  const player = new XGPlayer({
+    el: $('#xg-player'), url: meta.stream, width: '100%', height: '100%',
+    videoInit: false, autoplay: false, playsinline: true,
+    ignores: ['mobile', 'pc', 'keyboard', 'progress', 'time', 'start', 'loading', 'error', 'replay', 'miniprogress', ...(isIOS ? ['volume'] : [])],
+    controls: { autoHide: false, initShow: true },
+    playbackRate: [2, 1.5, 1, 0.5],
+    fullscreen: { target: root, useScreenOrientation: true, lockOrientationType: 'landscape' },
+    volume: Number.isFinite(savedVolume) ? clamp(savedVolume, 0, 1) : 1,
+  })
+  // Hestia owns source switching so xgplayer never overwrites the HLS MediaSource.
+  player.handleSource = false
+  await player.start()
+  if (!isCurrent()) { player.destroy(); root.remove(); return null }
+  const leftGrid = $('xg-left-grid'), rightGrid = $('xg-right-grid')
+  if (meta.prev) leftGrid.insertAdjacentHTML('afterbegin', `<button class="pbtn" id="btn-prev" title="上一个">${icon('back', 17)}</button>`)
+  if (meta.next) leftGrid.insertAdjacentHTML('beforeend', `<button class="pbtn" id="btn-next" title="下一个">${icon('fwd', 17)}</button>`)
+  rightGrid.insertAdjacentHTML('beforeend', `<button class="pbtn ${ccTracks.length ? '' : 'hide'}" id="btn-cc" title="字幕">${icon('cc', 20)}</button>`)
+  const vid = player.media, gesture = $('#gesture'), hud = $('#hud')
   const hudIco = $('#hud-ico'), hudText = $('#hud-text'), hudBar = $('#hud-bar'), hudBarI = $('#hud-bar-i')
   const seek = $('#seek'), playedEl = $('#played'), bufEl = $('#buf'), knob = $('#knob')
   const tCur = $('#t-cur'), tDur = $('#t-dur')
-  const btnPlay = $('#btn-play'), speedMenu = $('#speed-menu'), chip = $('#tc-chip')
+  const chip = $('#tc-chip')
   const spinText = $('#spin-text'), errText = $('#err-text')
   const resumeTip = $('#resume-tip'), resumeText = $('#resume-text')
 
   let mode = 'direct'          // direct | hls
   let hls = null
+  let nativeSource = null
   let session = null
   let offset = 0
   let failoverTried = false
-  let rate = 1
   let lpPrevRate = 1
   let brightness = clamp(parseFloat(localStorage.getItem('hestia.brightness') || '1') || 1, 0.2, 1)
   let directStartAt = 0
@@ -101,23 +132,29 @@ export async function PlayerView(app, id) {
   let resumeShown = false
   let lastSave = 0
   let destroyed = false
+  let pageHidden = false
+  let sourceGeneration = 0
+  let pendingHlsSeek = null // 原视频时间与播放意图，不受切源时 video 清零/暂停影响
+  let sourceChanging = false
+  let playIntent = false
+  let hlsSeekTimer = null
 
   // ---------- 基础 ----------
   const totalDur = () => mode === 'direct' ? (vid.duration || 0) : (meta.duration > 0 ? meta.duration : offset + (vid.duration || 0))
-  const curTime = () => mode === 'direct' ? vid.currentTime : offset + vid.currentTime
+  const curTime = () => pendingHlsSeek ? pendingHlsSeek.target : (mode === 'direct' ? vid.currentTime : offset + vid.currentTime)
 
   function applyBrightness() { vid.style.filter = `brightness(${brightness})` }
   applyBrightness()
 
-  function tryPlay() { vid.play().catch(() => showControls()) }
+  function tryPlay() { const result = player.play(); if (result && result.catch) result.catch(() => showControls()) }
 
-  function togglePlay() { vid.paused ? tryPlay() : vid.pause() }
-
-  function setRate(s) {
-    rate = s
-    vid.playbackRate = s
-    $('#btn-speed').textContent = s + 'x'
-    speedMenu.querySelectorAll('button').forEach(b => b.classList.toggle('active', parseFloat(b.dataset.s) === s))
+  function togglePlay() {
+    if (pendingHlsSeek) {
+      pendingHlsSeek.shouldPlay = !pendingHlsSeek.shouldPlay
+      if (!sourceChanging) pendingHlsSeek.shouldPlay ? tryPlay() : vid.pause()
+      return
+    }
+    vid.paused ? tryPlay() : vid.pause()
   }
 
   // ---------- HUD ----------
@@ -137,75 +174,146 @@ export async function PlayerView(app, id) {
 
   // ---------- 控制栏显隐 ----------
   let controlsTimer = null
+  function closeSpeedMenu() {
+    const speed = player.getPlugin('playbackRate')
+    if (speed && speed.isActive) speed.toggle(false)
+  }
   function showControls() {
     root.classList.remove('controls-hidden')
     clearTimeout(controlsTimer)
     controlsTimer = setTimeout(() => {
-      if (!vid.paused && speedMenu.hidden && ccMenu.hidden && resumeTip.hidden) root.classList.add('controls-hidden')
+      if (!vid.paused && ccMenu.hidden && resumeTip.hidden) {
+        if (root.querySelector('.xg-options-list.active')) showControls()
+        else root.classList.add('controls-hidden')
+      }
     }, 3000)
   }
   function toggleControls() {
+    closeSpeedMenu()
     if (root.classList.contains('controls-hidden')) showControls()
-    else { root.classList.add('controls-hidden'); speedMenu.hidden = true; ccMenu.hidden = true }
+    else { root.classList.add('controls-hidden'); ccMenu.hidden = true }
   }
 
   // ---------- 播放源 ----------
+  function deleteSession(sid) {
+    if (sid) fetch(`/api/transcode/${sid}`, { method: 'DELETE', keepalive: true }).catch(() => {})
+  }
   function stopSession() {
+    nativeSource = null
     if (session) {
       const sid = session
-      fetch(`/api/transcode/${sid}`, { method: 'DELETE', keepalive: true }).catch(() => {})
       session = null
+      deleteSession(sid)
     }
   }
   function destroyHLS() { if (hls) { try { hls.destroy() } catch {} hls = null } }
+  function cancelHlsSeek() { clearTimeout(hlsSeekTimer); hlsSeekTimer = null }
 
-  async function ensureHls() {
-    if (window.Hls) return window.Hls
-    await new Promise((res, rej) => {
-      const s = document.createElement('script')
-      s.src = '/assets/js/vendor/hls.min.js'
-      s.onload = res
-      s.onerror = () => rej(new Error('hls.js 加载失败'))
-      document.head.appendChild(s)
-    })
-    if (!window.Hls) throw new Error('hls.js 加载失败')
-    return window.Hls
-  }
-
-  async function startHLS(startAt) {
+  async function startHLS(startAt, shouldPlay = true, recoverMissingSession = true) {
     if (!meta.playback.transcodeAvailable) throw new Error('服务端未找到 ffmpeg，无法转码（可将 ffmpeg 放到程序同目录或加入 PATH）')
+    cancelHlsSeek()
+    const generation = ++sourceGeneration
+    const target = Math.max(0, startAt || 0)
+    const pending = pendingHlsSeek && pendingHlsSeek.target === target
+      ? pendingHlsSeek : { target, shouldPlay }
+    pendingHlsSeek = pending
+    sourceChanging = true
     destroyHLS()
     stopSession()
     if (destroyed) return
+    root.classList.remove('error')
     root.classList.add('loading')
     spinText.textContent = '转码启动中…'
     chip.hidden = false
     chip.textContent = '转码中…'
-    const r = await post(`/api/media/${id}/transcode`, { start: Math.max(0, startAt || 0) })
-    session = r.sessionId
+    let r
+    let reservedId = null
+    let Hls = null
+    let useMSE = false
+    try {
+      // Prepare the playback path before starting the server's transcode.
+      // Prefer MSE when Chromium advertises native HLS but cannot demux TS.
+      const nativeHls = vid.canPlayType('application/vnd.apple.mpegurl')
+      try { Hls = await ensureHls() } catch (error) {
+        if (!nativeHls) throw error
+      }
+      if (destroyed || generation !== sourceGeneration) return
+      useMSE = Hls && Hls.isSupported()
+      if (!useMSE && !nativeHls) throw new Error('浏览器不支持 HLS 播放')
+      const reservation = await post(`/api/media/${id}/transcode/reserve`)
+      reservedId = reservation.sessionId
+      if (!reservedId) throw new Error('转码会话预留失败')
+      if (destroyed || generation !== sourceGeneration) { deleteSession(reservedId); return }
+      // Record the ID before starting FFmpeg, so pagehide can cancel either
+      // the reservation or the session even when the start response is pending.
+      session = reservedId
+      r = await post(`/api/media/${id}/transcode`, { start: target, sessionId: reservedId })
+      if (r.sessionId !== reservedId) {
+        deleteSession(r.sessionId)
+        throw new Error('转码会话标识不匹配')
+      }
+    } catch (error) {
+      if (session === reservedId) stopSession()
+      else deleteSession(reservedId)
+      if (destroyed || generation !== sourceGeneration) return
+      sourceChanging = false
+      throw error
+    }
+    if (destroyed || generation !== sourceGeneration) {
+      if (session === reservedId) session = null
+      deleteSession(reservedId)
+      return
+    }
     offset = r.start
     mode = 'hls'
-    if (vid.canPlayType('application/vnd.apple.mpegurl')) {
-      vid.src = r.url
-    } else {
-      const Hls = await ensureHls()
-      if (!Hls.isSupported()) throw new Error('浏览器不支持 HLS 播放')
-      hls = new Hls({ maxBufferLength: 30 })
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (!data.fatal) return
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad()
-        else showError('转码播放失败：' + (data.details || ''))
-      })
-      hls.loadSource(r.url)
-      hls.attachMedia(vid)
+    try {
+      if (useMSE) {
+        const instance = new Hls({ maxBufferLength: 30 })
+        hls = instance
+        instance.on(Hls.Events.ERROR, (_, data) => {
+          if (!data.fatal || hls !== instance || generation !== sourceGeneration) return
+          const missing = data.type === Hls.ErrorTypes.NETWORK_ERROR && data.response?.code === 404
+          if (missing && recoverMissingSession) {
+            startHLS(curTime() || 0, playIntent, false).catch(error => showError(error.message))
+            return
+          }
+          instance.stopLoad()
+          failTranscode(missing ? '转码会话已结束，请重试' : undefined)
+        })
+        instance.loadSource(r.url)
+        instance.attachMedia(vid)
+      } else {
+        nativeSource = { url: r.url, generation, recoverMissingSession }
+        vid.src = r.url
+      }
+      // hls.js clears existing text-track cues when attaching media. Recreate
+      // the selected track after attachment, using this session's time origin.
+      refreshCC(true)
+      playIntent = pending.shouldPlay
+      pendingHlsSeek = null
+      sourceChanging = false
+      if (playIntent) tryPlay()
+      else { vid.pause(); root.classList.remove('loading') }
+    } catch (error) {
+      if (destroyed || generation !== sourceGeneration) return
+      sourceChanging = false
+      stopSession()
+      throw error
     }
-    tryPlay()
   }
 
   function startDirect(startAt) {
+    cancelHlsSeek()
+    ++sourceGeneration
+    pendingHlsSeek = null
+    sourceChanging = false
+    destroyHLS()
+    stopSession()
     mode = 'direct'
     offset = 0
+    playIntent = true
     directStartAt = Math.max(0, startAt || 0)
+    refreshCC()
     vid.src = meta.stream
     tryPlay()
   }
@@ -214,6 +322,35 @@ export async function PlayerView(app, id) {
     root.classList.remove('loading')
     root.classList.add('error')
     errText.textContent = msg
+  }
+
+  function failTranscode(message = '转码播放失败，请重试') {
+    stopSession()
+    vid.pause()
+    showError(message)
+  }
+
+  async function handleNativeHlsError() {
+    const source = nativeSource
+    nativeSource = null
+    const target = curTime() || 0
+    const shouldPlay = playIntent
+    let missing = false
+    if (source.recoverMissingSession) {
+      // Native media errors do not expose the HTTP status of the playlist.
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 3000)
+      try {
+        const response = await fetch(source.url, { method: 'HEAD', cache: 'no-store', signal: controller.signal })
+        missing = response.status === 404
+      } catch {} finally { clearTimeout(timeout) }
+    }
+    if (source.generation !== sourceGeneration || !session) return
+    if (missing) {
+      startHLS(target, shouldPlay, false).catch(error => showError(error.message))
+      return
+    }
+    failTranscode()
   }
 
   // ---------- 进度 ----------
@@ -232,12 +369,19 @@ export async function PlayerView(app, id) {
       updateProgressUI(t, total ? t / total : 0)
     } else {
       updateProgressUI(t, total ? t / total : 0)
-      debouncedHlsSeek(t)
+      const shouldPlay = pendingHlsSeek ? pendingHlsSeek.shouldPlay : !vid.paused
+      ++sourceGeneration // 立即使进行中的旧请求失效，不等防抖计时结束
+      pendingHlsSeek = { target: t, shouldPlay }
+      debouncedHlsSeek(t, shouldPlay)
     }
   }
-  const debouncedHlsSeek = debounce(t => {
-    if (!destroyed) startHLS(t).catch(e => showError(e.message))
-  }, 700)
+  function debouncedHlsSeek(t, shouldPlay) {
+    cancelHlsSeek()
+    hlsSeekTimer = setTimeout(() => {
+      hlsSeekTimer = null
+      if (!destroyed) startHLS(t, shouldPlay).catch(e => showError(e.message))
+    }, 700)
+  }
 
   seek.addEventListener('input', () => {
     seeking = true
@@ -253,18 +397,24 @@ export async function PlayerView(app, id) {
   // ---------- 断点续播 ----------
   const pKey = `hestia.progress.${id}`
   const getSaved = () => { try { return JSON.parse(localStorage.getItem(pKey)) } catch { return null } }
-  function saveProgress() {
+  function saveProgress(useBeacon = false) {
     const t = curTime()
-    if (!t || !isFinite(t) || t < 5) return
+    if (!Number.isFinite(t) || t < 5 || (vid.ended && !pendingHlsSeek)) return
     const d = totalDur()
     try {
       localStorage.setItem(pKey, JSON.stringify({ t, d, at: Date.now() }))
     } catch {}
+    const body = JSON.stringify({ mediaId: id, position: t, duration: d, device, name: meta.name, folder: meta.folderName })
+    if (useBeacon) {
+      try {
+        if (navigator.sendBeacon('/api/progress', new Blob([body], { type: 'application/json' }))) return
+      } catch {}
+    }
     // 多设备同步：服务端保存（最后写入优先）
     fetch('/api/progress', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mediaId: id, position: t, duration: d, device, name: meta.name, folder: meta.folderName }),
+      body,
       keepalive: true,
     }).catch(() => {})
   }
@@ -321,18 +471,41 @@ export async function PlayerView(app, id) {
       }
     } catch {}
   })
-  vid.addEventListener('waiting', () => { root.classList.add('loading'); spinText.textContent = '缓冲中…' })
+  vid.addEventListener('waiting', () => {
+    if (root.classList.contains('error')) return
+    root.classList.add('loading')
+    spinText.textContent = '缓冲中…'
+  })
   vid.addEventListener('playing', () => { root.classList.remove('loading', 'error'); chip.textContent = '转码'; showControls() })
   vid.addEventListener('canplay', () => root.classList.remove('loading'))
-  vid.addEventListener('play', () => { btnPlay.innerHTML = icon('pause', 22); showControls() })
-  vid.addEventListener('pause', () => { btnPlay.innerHTML = icon('play', 22); showControls(); saveProgress() })
+  vid.addEventListener('play', () => {
+    if (!sourceChanging && !pageHidden && !vid.paused) {
+      playIntent = true
+      if (pendingHlsSeek) pendingHlsSeek.shouldPlay = true
+    }
+    showControls()
+  })
+  vid.addEventListener('pause', () => {
+    // A failed media request can pause the element while playback is still wanted.
+    if (!sourceChanging && !pageHidden && vid.paused && !vid.error && !vid.ended) {
+      playIntent = false
+      if (pendingHlsSeek) pendingHlsSeek.shouldPlay = false
+    }
+    showControls()
+    saveProgress()
+  })
   vid.addEventListener('ended', () => {
     localStorage.removeItem(pKey)
     fetch(`/api/progress/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {})
     if (meta.next) toast(`已播完 · 下一个：《${meta.next.name}》`)
   })
   vid.addEventListener('error', () => {
-    if (mode !== 'direct' || !vid.error) return
+    if (!vid.error || sourceChanging || destroyed || pageHidden) return
+    if (mode === 'hls') {
+      // MSE errors are handled by hls.js. Native HLS reports errors here.
+      if (nativeSource && !pendingHlsSeek) handleNativeHlsError()
+      return
+    }
     if (!meta.playback.transcodeAvailable) { showError('该格式浏览器无法播放，且服务端缺少 ffmpeg'); return }
     if (failoverTried) { showError('播放失败：浏览器无法解码该文件'); return }
     failoverTried = true
@@ -341,14 +514,12 @@ export async function PlayerView(app, id) {
   })
 
   // ---------- 控件 ----------
-  btnPlay.addEventListener('click', togglePlay)
   $('#btn-back').addEventListener('click', () => {
     if (history.length > 1) history.back()
     else location.hash = '#/'
   })
   if (meta.prev) $('#btn-prev').addEventListener('click', () => { location.hash = `#/play/${meta.prev.id}` })
   if (meta.next) $('#btn-next').addEventListener('click', () => { location.hash = `#/play/${meta.next.id}` })
-  $('#btn-fs').addEventListener('click', toggleFS)
   function toggleFS() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     else {
@@ -358,56 +529,55 @@ export async function PlayerView(app, id) {
     }
   }
 
-  // 倍速菜单（点击按钮弹出，选中或点击其他区域后收起）
-  speedMenu.innerHTML = SPEEDS.map(s => `<button data-s="${s}" class="${s === 1 ? 'active' : ''}">${s}x</button>`).join('')
-  speedMenu.addEventListener('click', e => {
-    const b = e.target.closest('button')
-    if (!b) return
-    setRate(parseFloat(b.dataset.s))
-    speedMenu.hidden = true
-    showControls()
+  $('#err-retry').addEventListener('click', () => {
+    startHLS(curTime() || 0).catch(e => showError(e.message))
   })
-  function closeMenus() {
-    speedMenu.hidden = true
-    ccMenu.hidden = true
-    showControls()
-  }
-  // 点击菜单/按钮以外的任意位置都收起（对齐主流播放器行为）
+  // 点击字幕菜单以外的任意位置时收起。
   root.addEventListener('click', e => {
-    if (speedMenu.hidden && ccMenu.hidden) return
-    if (e.target.closest('#speed-menu, #btn-speed, #cc-menu, #btn-cc')) return
-    closeMenus()
+    if (!e.target.closest('.xgplayer-playbackrate, .xg-options-list')) closeSpeedMenu()
+    if (!ccMenu.hidden && !e.target.closest('#cc-menu, #btn-cc')) {
+      ccMenu.hidden = true
+      showControls()
+    }
   }, true)
-  $('#btn-speed').addEventListener('click', e => {
-    e.stopPropagation()
-    ccMenu.hidden = true
-    speedMenu.hidden = !speedMenu.hidden
-    showControls()
-  })
 
   // ---------- 字幕（外挂默认开启；内嵌按需提取） ----------
   const ccMenu = root.querySelector('#cc-menu')
   const btnCC = root.querySelector('#btn-cc')
-  subExt.forEach((s, i) => {
-    const t = document.createElement('track')
-    t.kind = 'captions'
-    t.label = s.name
-    t.srclang = 'zh'
-    t.src = `/api/subtitle/${s.id}`
-    if (i === 0) t.default = true
-    vid.appendChild(t)
-    ccTracks[i].el = t
-  })
+  function subtitleURL(trk) {
+    const base = trk.kind === 'ext' ? `/api/subtitle/${trk.id}` : `/api/media/${id}/embeddedsub/${trk.index}`
+    return mode === 'hls' && offset > 0 ? `${base}?offset=${encodeURIComponent(offset)}` : base
+  }
   function ensureTrackEl(trk) {
     if (trk.el) return trk.el
     const t = document.createElement('track')
     t.kind = 'captions'
     t.label = trk.label
     t.srclang = 'zh'
-    t.src = trk.kind === 'ext' ? `/api/subtitle/${trk.id}` : `/api/media/${id}/embeddedsub/${trk.index}`
+    t.addEventListener('load', () => {
+      // Keep auto-positioned native captions above our custom control bar.
+      for (const cue of t.track.cues || []) if (cue.line === 'auto') cue.line = -6
+    })
+    t.src = subtitleURL(trk)
     vid.appendChild(t)
     trk.el = t
     return t
+  }
+  function refreshCC(recreate = false) {
+    for (const trk of ccTracks) {
+      if (!trk.el) continue
+      if (recreate) {
+        trk.el.remove()
+        trk.el = null
+        continue
+      }
+      const url = subtitleURL(trk)
+      if (trk.el.getAttribute('src') !== url) {
+        trk.el.track.mode = 'disabled'
+        trk.el.src = url
+      }
+    }
+    setCC(activeCC)
   }
   function setCC(idx) {
     activeCC = idx
@@ -434,7 +604,6 @@ export async function PlayerView(app, id) {
     btnCC.addEventListener('click', e => {
       e.stopPropagation()
       ccMenu.hidden = !ccMenu.hidden
-      speedMenu.hidden = true
       showControls()
     })
     ccMenu.addEventListener('click', e => {
@@ -448,17 +617,7 @@ export async function PlayerView(app, id) {
 
   // 音量（桌面 / 非iOS）
   if (!isIOS) {
-    const volInput = $('#vol'), btnMute = $('#btn-mute')
-    vid.volume = clamp(parseFloat(localStorage.getItem('hestia.volume') ?? '1') || 1, 0, 1)
-    const syncVol = () => {
-      volInput.value = vid.volume
-      volInput.style.setProperty('--v', vid.volume * 100 + '%')
-      btnMute.innerHTML = icon(vid.muted || vid.volume === 0 ? 'volMute' : 'vol', 19)
-    }
-    volInput.addEventListener('input', () => { vid.volume = parseFloat(volInput.value); vid.muted = false; syncVol() })
-    btnMute.addEventListener('click', () => { vid.muted = !vid.muted; syncVol() })
-    vid.addEventListener('volumechange', () => { syncVol(); localStorage.setItem('hestia.volume', String(vid.volume)) })
-    syncVol()
+    vid.addEventListener('volumechange', () => localStorage.setItem('hestia.volume', String(vid.volume)))
   } else if (!localStorage.getItem('hestia.ioshint')) {
     localStorage.setItem('hestia.ioshint', '1')
     setTimeout(() => toast('iOS 上请用音量键调音量；右侧上下滑动可快进/倒退', 4200), 800)
@@ -479,7 +638,7 @@ export async function PlayerView(app, id) {
       lpTimer: setTimeout(() => {
         if (!ptr || ptr.moved) return
         ptr.lp = true
-        lpPrevRate = rate
+        lpPrevRate = vid.playbackRate
         vid.playbackRate = 2
         showHUD('play', '2x 快进中', null)
       }, 500),
@@ -569,7 +728,7 @@ export async function PlayerView(app, id) {
 
   // 鼠标移动唤出控制栏
   root.addEventListener('pointermove', e => {
-    if (e.pointerType === 'mouse' && e.target.closest('.p-top, .p-bottom, .speed-menu, .sub-menu') === null) showControls()
+    if (e.pointerType === 'mouse' && e.target.closest('.p-top, .p-bottom, .xgplayer-controls, .sub-menu') === null) showControls()
   })
 
   // ---------- 键盘 ----------
@@ -584,24 +743,29 @@ export async function PlayerView(app, id) {
       case 'ArrowUp': if (!isIOS) { vid.volume = clamp(vid.volume + 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'ArrowDown': if (!isIOS) { vid.volume = clamp(vid.volume - 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'f': toggleFS(); break
-      case 'Escape': speedMenu.hidden = true; ccMenu.hidden = true; break
+      case 'Escape': ccMenu.hidden = true; break
     }
   }
   document.addEventListener('keydown', onKey)
 
   // ---------- 生命周期 ----------
   const onPageHide = () => {
-    saveProgress()
+    pageHidden = true
+    ++sourceGeneration
+    cancelHlsSeek()
     stopSession()
-    // 页面关闭时尽力上报进度
-    try {
-      const t = curTime() || 0
-      navigator.sendBeacon('/api/progress', new Blob([JSON.stringify({
-        mediaId: id, position: t, duration: totalDur(), device, name: meta.name, folder: meta.folderName,
-      })], { type: 'application/json' }))
-    } catch {}
+    saveProgress(true)
+  }
+  const onPageShow = e => {
+    if (!e.persisted || !pageHidden || destroyed) return
+    pageHidden = false
+    if (mode === 'hls' || sourceChanging) {
+      const shouldPlay = pendingHlsSeek ? pendingHlsSeek.shouldPlay : !vid.paused
+      startHLS(curTime() || 0, shouldPlay).catch(error => showError(error.message))
+    }
   }
   window.addEventListener('pagehide', onPageHide)
+  window.addEventListener('pageshow', onPageShow)
 
   // ---------- 启动 ----------
   if (meta.playback.mode === 'transcode') {
@@ -613,11 +777,15 @@ export async function PlayerView(app, id) {
   return {
     destroy() {
       destroyed = true
+      ++sourceGeneration
+      cancelHlsSeek()
       saveProgress()
       document.removeEventListener('keydown', onKey)
       window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pageshow', onPageShow)
       destroyHLS()
       stopSession()
+      player.destroy()
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
       clearTimeout(controlsTimer)
       clearTimeout(hudTimer)

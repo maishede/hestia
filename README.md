@@ -19,9 +19,9 @@ build.bat
 ./build.sh
 ```
 
-需要 Go 1.22+。第三方依赖已 vendor 到仓库（离线可构建）。产物在 `dist/Hestia(.exe)`。
+需要 Go 1.27 或更新版本。第三方依赖已 vendor 到仓库（离线可构建）。产物在 `dist/Hestia(.exe)`。
 
-**前端不需要单独构建**：前端是原生 HTML/CSS/ES Modules（无 npm、无打包步骤），`go:embed` 在编译时把 `web/` 目录整个打进 exe，运行时由 Go 服务直接输出。改前端只需重新执行构建命令。`web/assets/js/vendor/hls.min.js` 是预下载的第三方库，已随源码入库，同样无需下载。
+**前端不需要单独构建**：前端是原生 HTML/CSS/ES Modules（无 npm、无打包步骤），`go:embed` 在编译时把 `web/` 目录整个打进 exe，运行时由 Go 服务直接输出。改前端只需重新执行构建命令。hls.js 与西瓜播放器 xgplayer 3.0.27 的 JS/CSS 已随源码入库，播放器不依赖 CDN；xgplayer 的 MIT 许可见 `web/assets/js/vendor/xgplayer.LICENSE.txt`。
 
 交叉编译（在任意平台构建其他平台产物）：
 
@@ -79,7 +79,7 @@ Windows 控制台提供「检查更新」按钮，仅在点击后查询 GitHub �
 | 键盘 | 空格/K 播放暂停 · J/L ±10s · ←/→ ±5s · ↑/↓ 音量 · F 全屏 |
 | 字幕 | 外挂 srt/ass（同名或"视频名.语言"）自动加载默认开启；内嵌文本字幕轨（srt/ass/mov_text）CC 菜单按需提取；统一转 WebVTT 原生渲染 |
 | 进度 | 断点续播（本地 + 服务端合并，较新者胜）；首页"继续观看"带进度条；**多设备进度同步**（最后写入优先） |
-| 转码 | HEVC/MKV/AC3 等自动降级 ffmpeg→HLS；空闲 2 分钟自动销毁；并发上限 3 |
+| 转码 | HEVC/MKV/AC3 等通过 FFmpeg 转为 H.264/AAC HLS。准备就绪后没有媒体读取的预留会话约 25 秒内回收，已读取的会话空闲约 2 分钟回收，并发上限 3。 |
 | 热配置 | 媒体库增删改、端口切换，均不中断服务；扫描时机=添加库时+手动「重新扫描」（不做后台周期扫描，避免空耗磁盘/CPU） |
 | 运维 | Windows GUI 配置窗口（WebView2 加载内嵌页面，与手机端同款浅色设计；启停/路径/端口/自启/重扫/日志/检查更新；GUI 接口仅绑定 127.0.0.1，局域网不可达）；滚动日志（`data/logs/hestia.log`，5MB×3，窗口可一键打开）；缩略图/字幕/封面帧磁盘缓存 |
 
@@ -116,6 +116,7 @@ HESTIA_HOME=./.dev go run .    # 数据/配置隔离到 .dev 目录
 | [mozillazg/go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | 拼音搜索 |
 | [jchv/go-webview2](https://github.com/jchv/go-webview2) | MIT | Windows GUI 窗口（WebView2，Win11 自带运行时） |
 | [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | 桌面浏览器 HLS 播放 |
+| [xgplayer](https://github.com/bytedance/xgplayer) | MIT | 网页播放器与播放控制 |
 | ffmpeg / ffprobe | GPL（外部程序，按需自备） | 转码 / 探测 |
 
 ## 安全说明

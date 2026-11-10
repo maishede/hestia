@@ -7,13 +7,9 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
-	"time"
 
 	"hestia/internal/config"
 	"hestia/internal/index"
@@ -55,7 +51,7 @@ func main() {
 	if runUpdateHelperIfRequested() {
 		return
 	}
-	if runtime.GOOS == "windows" && singleInstanceTaken() {
+	if singleInstanceTaken() {
 		return // 已有实例（可能在托盘），立即退出不闪窗
 	}
 	home := os.Getenv("HESTIA_HOME")
@@ -99,35 +95,7 @@ func main() {
 	}
 	a.apply(cfgM.Get())
 	cfgM.OnChange(a.apply)
-
-	if runtime.GOOS == "windows" {
-		// GUI 模式：原生窗口承载全部配置与启停，服务默认自启
-		if err := a.srv.StartListener(); err != nil {
-			logger.Printf("服务自启失败（可在窗口中手动启动）: %v", err)
-		}
-		runGUI(a) // 阻塞至窗口关闭 → shutdown
-		return
-	}
-
-	// 控制台模式（macOS / Linux）：配置走 config.json
-	if err := a.srv.ListenAndServe(); err != nil {
-		fatal(logger, "%v", err)
-	}
-	if actual := a.srv.Port(); actual != a.cfgM.Get().Port {
-		_ = a.cfgM.Update(func(c *config.Config) { c.Port = actual })
-	}
-	a.banner()
-	if a.cfgM.Get().OpenBrowser {
-		go func() {
-			time.Sleep(600 * time.Millisecond)
-			openBrowser(a.srv.URLs()[0])
-		}()
-	}
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
-	fmt.Println("\n正在退出…")
-	a.shutdown()
+	runApp(a)
 }
 
 func fatal(l *log.Logger, format string, v ...any) {

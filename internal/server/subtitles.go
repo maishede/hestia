@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,11 +24,129 @@ var textSubCodecs = map[string]bool{
 }
 
 var assTagRe = regexp.MustCompile(`\{[^}]*\}`)
+var vttBlocks = regexp.MustCompile(`\n[ \t]*\n+`)
+var vttTiming = regexp.MustCompile(`^((?:[0-9]{2,}:)?[0-9]{2}:[0-9]{2}\.[0-9]{3})[ \t]+-->[ \t]+((?:[0-9]{2,}:)?[0-9]{2}:[0-9]{2}\.[0-9]{3})(.*)$`)
+var vttInlineTime = regexp.MustCompile(`<((?:[0-9]{2,}:)?[0-9]{2}:[0-9]{2}\.[0-9]{3})>`)
+
+// 字幕总是按原视频时间缓存，转码从中间开始时按会话实际起点调整。
+func subtitleOffset(r *http.Request) (int64, error) {
+	value := r.URL.Query().Get("offset")
+	if value == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds > 315360000 {
+		return 0, fmt.Errorf("非法字幕时间偏移")
+	}
+	return int64(math.Round(seconds * 1000)), nil
+}
+
+func vttMillis(value string) (int64, bool) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0, false
+	}
+	var hours int64
+	if len(parts) == 3 {
+		var err error
+		hours, err = strconv.ParseInt(parts[0], 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		parts = parts[1:]
+	}
+	minutes, err := strconv.ParseInt(parts[0], 10, 32)
+	if err != nil || minutes >= 60 {
+		return 0, false
+	}
+	seconds := strings.Split(parts[1], ".")
+	if len(seconds) != 2 {
+		return 0, false
+	}
+	sec, err := strconv.ParseInt(seconds[0], 10, 32)
+	if err != nil || sec >= 60 {
+		return 0, false
+	}
+	ms, err := strconv.ParseInt(seconds[1], 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return ((hours*60+minutes)*60+sec)*1000 + ms, true
+}
+
+func formatVTTMillis(ms int64) string {
+	return fmt.Sprintf("%02d:%02d:%02d.%03d", ms/3600000, ms/60000%60, ms/1000%60, ms%1000)
+}
+
+func shiftVTT(raw string, offset int64) string {
+	if offset == 0 {
+		return raw
+	}
+	raw = strings.ReplaceAll(strings.ReplaceAll(raw, "\r\n", "\n"), "\r", "\n")
+	blocks := vttBlocks.Split(raw, -1)
+	kept := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		lines := strings.Split(block, "\n")
+		first := strings.TrimPrefix(lines[0], "\ufeff")
+		if strings.HasPrefix(first, "WEBVTT") || first == "STYLE" || first == "REGION" || first == "NOTE" || strings.HasPrefix(first, "NOTE ") {
+			kept = append(kept, block)
+			continue
+		}
+		timing := 0
+		match := vttTiming.FindStringSubmatch(lines[timing])
+		if match == nil && len(lines) > 1 {
+			timing = 1
+			match = vttTiming.FindStringSubmatch(lines[timing])
+		}
+		if match == nil {
+			kept = append(kept, block)
+			continue
+		}
+		start, okStart := vttMillis(match[1])
+		end, okEnd := vttMillis(match[2])
+		if !okStart || !okEnd {
+			kept = append(kept, block)
+			continue
+		}
+		if end <= offset {
+			continue
+		}
+		start -= offset
+		if start < 0 {
+			start = 0
+		}
+		lines[timing] = formatVTTMillis(start) + " --> " + formatVTTMillis(end-offset) + match[3]
+		for i := timing + 1; i < len(lines); i++ {
+			lines[i] = vttInlineTime.ReplaceAllStringFunc(lines[i], func(tag string) string {
+				stamp, ok := vttMillis(tag[1 : len(tag)-1])
+				if !ok {
+					return tag
+				}
+				if stamp <= offset+start {
+					return ""
+				}
+				return "<" + formatVTTMillis(stamp-offset) + ">"
+			})
+		}
+		kept = append(kept, strings.Join(lines, "\n"))
+	}
+	return strings.Join(kept, "\n\n")
+}
+
+func writeSubtitle(w http.ResponseWriter, vtt []byte, offset int64) {
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	_, _ = w.Write([]byte(shiftVTT(string(vtt), offset)))
+}
 
 // ---------- 外挂字幕 ----------
 
 // handleSubtitle 输出外挂字幕，统一转换为 WebVTT（浏览器原生 <track> 渲染）。
 func (s *Server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
+	offset, err := subtitleOffset(r)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	abs, sub, err := s.store.ResolveSubtitle(r.PathValue("id"))
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "字幕不存在")
@@ -51,9 +170,8 @@ func (s *Server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 	default:
 		vtt = strings.TrimPrefix(string(raw), "\ufeff")
 	}
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write([]byte(vtt))
+	writeSubtitle(w, []byte(vtt), offset)
 }
 
 func srtToVtt(raw string) string {
@@ -127,6 +245,11 @@ func assTime(v string) string {
 
 // handleEmbeddedSub 用 ffmpeg 把指定字幕轨提取为 VTT（结果缓存到磁盘）。
 func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
+	offset, err := subtitleOffset(r)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	id := r.PathValue("id")
 	idx, err := strconv.Atoi(r.PathValue("index"))
 	if err != nil || idx < 0 {
@@ -159,16 +282,14 @@ func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
 	cacheDir := filepath.Join(s.dataDir, "cache", "sub")
 	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.vtt", id, idx, m.Size))
 	if b, err := os.ReadFile(cache); err == nil {
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		_, _ = w.Write(b)
+		writeSubtitle(w, b, offset)
 		return
 	}
 	_ = os.MkdirAll(cacheDir, 0o755)
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
 	if b, err := os.ReadFile(cache); err == nil { // 双重检查
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		_, _ = w.Write(b)
+		writeSubtitle(w, b, offset)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -193,8 +314,7 @@ func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, "字幕读取失败")
 		return
 	}
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	_, _ = w.Write(b)
+	writeSubtitle(w, b, offset)
 }
 
 // ---------- 无图封面：视频抽帧 ----------
