@@ -247,12 +247,15 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 			jerr(w, "端口取值 1-65535")
 			return
 		}
-		_ = a.cfgM.Update(func(c *config.Config) { c.Port = b.Port })
 		if a.srv.Running() {
-			if err := a.srv.StartListener(); err != nil {
+			if err := a.srv.RestartListener(a.cfgM.Get().Listen, b.Port); err != nil {
 				jerr(w, err.Error())
 				return
 			}
+		}
+		if err := a.cfgM.Update(func(c *config.Config) { c.Port = b.Port }); err != nil {
+			jerr(w, "保存端口设置失败："+err.Error())
+			return
 		}
 		jwt(w, guiState(a))
 	})
@@ -270,16 +273,12 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		jwt(w, map[string]any{"path": pickFolderDialog("选择媒体库文件夹")})
 	})
 	mux.HandleFunc("/gui/api/open", func(w http.ResponseWriter, r *http.Request) {
-		if a.srv.Running() {
-			host := strings.Trim(a.srv.ListenHost(), "[]")
-			switch host {
-			case "", "0.0.0.0":
-				host = "127.0.0.1"
-			case "::":
-				host = "::1"
-			}
-			openBrowser(fmt.Sprintf("http://%s", net.JoinHostPort(host, fmt.Sprint(a.srv.Port()))))
+		url := a.srv.LocalURL()
+		if url == "" {
+			jerr(w, "请先启动服务")
+			return
 		}
+		openBrowser(url)
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/openlog", func(w http.ResponseWriter, r *http.Request) {
@@ -306,13 +305,16 @@ func guiState(a *app) map[string]any {
 		})
 	}
 	urls := []string{}
-	if a.srv.Running() {
+	localURL := a.srv.LocalURL()
+	running := localURL != ""
+	if running {
 		urls = a.srv.URLs()
 	}
 	return map[string]any{
-		"running": a.srv.Running(), "urls": urls,
-		"update": guiUpdater.snapshot(),
-		"port":   c.Port, "autoStart": c.AutoStart,
+		"running": running, "urls": urls, "localUrl": localURL,
+		"activePort": a.srv.Port(),
+		"update":     guiUpdater.snapshot(),
+		"port":       c.Port, "autoStart": c.AutoStart,
 		"ffmpeg": a.tc.FFmpegOK(), "ffmpegPath": a.tc.FFmpeg,
 		"scanning": a.store.AnyScanning(), "folders": folders, "media": media,
 		"libs": libJSON,

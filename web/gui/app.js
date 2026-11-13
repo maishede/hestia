@@ -39,6 +39,12 @@ function render(s) {
   $('stateText').textContent = s.running ? '服务运行中' : '服务已停止'
   $('btnToggle').textContent = s.running ? '关闭服务' : '启动服务'
   $('btnToggle').classList.toggle('primary', !s.running)
+  $('btnOpen').disabled = !s.running
+  const localText = $('localUrlText')
+  localText.hidden = !s.localUrl
+  localText.textContent = s.localUrl
+    ? `本机访问 ${s.localUrl}${s.activePort !== s.port ? `（配置端口 ${s.port}，实际端口 ${s.activePort}）` : ''}`
+    : ''
   $('urlText').textContent = s.running && s.urls.length
     ? '手机浏览器访问：' + s.urls.join('  或  ')
     : '服务未启动，手机无法访问'
@@ -103,7 +109,7 @@ function act(fn) {
 }
 
 $('btnToggle').onclick = act(() => api('toggle-service'))
-$('btnOpen').onclick = act(() => { api('open'); return null })
+$('btnOpen').onclick = act(() => api('open'))
 $('btnLog').onclick = act(() => { api('openlog'); return null })
 $('btnAdd').onclick = act(() => {
   const path = $('pathInput').value.trim()

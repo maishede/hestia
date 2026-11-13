@@ -32,7 +32,9 @@ func runApp(a *app) {
 	if a.cfgM.Get().OpenBrowser {
 		go func() {
 			time.Sleep(600 * time.Millisecond)
-			openBrowser(a.srv.URLs()[0])
+			if url := a.srv.LocalURL(); url != "" {
+				openBrowser(url)
+			}
 		}()
 	}
 	quit := make(chan os.Signal, 1)

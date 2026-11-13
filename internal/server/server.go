@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,10 +34,12 @@ type Server struct {
 	mux   *http.ServeMux
 	index []byte
 
-	mu     sync.Mutex
-	srv    *http.Server
-	port   int
-	listen string
+	listenerMu    sync.Mutex // serialize listener changes and shutdown
+	mu            sync.Mutex
+	srv           *http.Server
+	port          int
+	requestedPort int
+	listen        string
 
 	subMu sync.Mutex // 串行化 ffmpeg 字幕提取/封面抽帧（家用带宽足够，避免磁盘抖动）
 }
@@ -100,73 +103,71 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(s.index)
 }
 
-// ListenAndServe 启动监听；端口被占时自动 +1 重试（最多 20 次）。
+// ListenAndServe 启动监听；配置端口被占时尝试后续端口。
 func (s *Server) ListenAndServe() error {
-	cfg := s.cfg.Get()
-	port := cfg.Port
-	var ln net.Listener
-	var err error
-	for i := 0; i < 21; i++ {
-		ln, err = net.Listen("tcp", fmt.Sprintf("%s:%d", cfg.Listen, port))
-		if err == nil {
-			port += i
-			break
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("无法监听 %s:%d: %w", cfg.Listen, cfg.Port, err)
-	}
-	s.mu.Lock()
-	s.port, s.listen = port, cfg.Listen
-	s.srv = &http.Server{Handler: s.mux, ReadHeaderTimeout: 10 * time.Second}
-	s.mu.Unlock()
-	go func() {
-		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logger.Printf("http 服务异常退出: %v", err)
-		}
-	}()
-	return nil
+	return s.StartListener()
 }
 
 // RestartListener 热切换监听地址/端口：先抢新端口（旧监听不动，失败保持现状），
 // 成功后再排空旧连接；目标与当前一致时为无操作。
 func (s *Server) RestartListener(listen string, port int) error {
-	s.mu.Lock()
-	old, curPort, curListen := s.srv, s.port, s.listen
-	s.mu.Unlock()
-	if old != nil && curPort == port && curListen == listen {
-		return nil
-	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", listen, port))
-	if err != nil {
-		return fmt.Errorf("端口 %d 不可用: %w", port, err)
-	}
-	if old != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = old.Shutdown(ctx)
-		cancel()
-	}
-	s.serveOn(ln, listen, port)
-	return nil
+	return s.changeListener(listen, port, false)
 }
 
-// StartListener 按当前配置启动监听。
+// StartListener 优先绑定配置端口，被占用时最多顺延 20 个端口。
 func (s *Server) StartListener() error {
 	c := s.cfg.Get()
-	return s.RestartListener(c.Listen, c.Port)
+	return s.changeListener(c.Listen, c.Port, true)
+}
+
+func (s *Server) changeListener(listen string, port int, tryNext bool) error {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
+
+	listen = strings.Trim(listen, "[]")
+	s.mu.Lock()
+	old, curPort, requestedPort, curListen := s.srv, s.port, s.requestedPort, s.listen
+	s.mu.Unlock()
+	if old != nil && curListen == listen && (curPort == port || tryNext && requestedPort == port) {
+		return nil
+	}
+	candidate := port
+	for {
+		ln, err := listenTCP(net.JoinHostPort(listen, strconv.Itoa(candidate)))
+		if err == nil {
+			actual := ln.Addr().(*net.TCPAddr).Port
+			s.serveOn(ln, listen, actual, port)
+			shutdownListener(old)
+			if candidate != port {
+				s.logger.Printf("端口 %d 已被占用或不可用，已改用 %d", port, actual)
+			}
+			return nil
+		}
+		if !tryNext || port <= 0 || candidate >= 65535 || candidate-port >= 20 || !portUnavailable(err) {
+			return fmt.Errorf("无法监听 %s: %w", net.JoinHostPort(listen, strconv.Itoa(candidate)), err)
+		}
+		candidate++
+	}
 }
 
 // StopListener 停止监听（进程不退出）。
 func (s *Server) StopListener() {
+	s.listenerMu.Lock()
+	defer s.listenerMu.Unlock()
 	s.mu.Lock()
 	old := s.srv
 	s.srv = nil
 	s.mu.Unlock()
-	if old != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = old.Shutdown(ctx)
-		cancel()
+	shutdownListener(old)
+}
+
+func shutdownListener(srv *http.Server) {
+	if srv == nil {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
 }
 
 // Running 报告服务是否在监听。
@@ -176,10 +177,10 @@ func (s *Server) Running() bool {
 	return s.srv != nil
 }
 
-func (s *Server) serveOn(ln net.Listener, listen string, port int) {
+func (s *Server) serveOn(ln net.Listener, listen string, port, requestedPort int) {
 	srv := &http.Server{Handler: s.mux, ReadHeaderTimeout: 10 * time.Second}
 	s.mu.Lock()
-	s.srv, s.port, s.listen = srv, port, listen
+	s.srv, s.port, s.listen, s.requestedPort = srv, port, listen, requestedPort
 	s.mu.Unlock()
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -194,10 +195,24 @@ func (s *Server) Port() int {
 	return s.port
 }
 
-func (s *Server) ListenHost() string {
+// LocalURL 返回本机浏览器使用的实际地址。服务停止时返回空字符串。
+func (s *Server) LocalURL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.listen
+	if s.srv == nil {
+		return ""
+	}
+	return localURL(s.listen, s.port)
+}
+
+func localURL(host string, port int) string {
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // URLs 返回局域网访问地址（过滤虚拟网卡：WSL/Hyper-V/VMware 等，排除 198.18 基准网段与链路本地地址）。
@@ -206,7 +221,7 @@ func (s *Server) URLs() []string {
 	host, port := s.listen, s.port
 	s.mu.Unlock()
 	if host != "" && host != "0.0.0.0" && host != "::" {
-		return []string{fmt.Sprintf("http://%s:%d", host, port)}
+		return []string{localURL(host, port)}
 	}
 	var out []string
 	ifaces, err := net.Interfaces()
@@ -249,7 +264,7 @@ func (s *Server) URLs() []string {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
 	if len(out) == 0 {
-		out = append(out, fmt.Sprintf("http://127.0.0.1:%d", port))
+		out = append(out, localURL(host, port))
 	}
 	return out
 }
