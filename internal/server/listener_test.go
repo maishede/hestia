@@ -6,12 +6,22 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"hestia/internal/config"
 )
+
+func testListenHost() string {
+	// Binding all interfaces in a new test executable can show a Windows
+	// Firewall prompt. Opt in when testing the wildcard-specific conflict.
+	if os.Getenv("HESTIA_TEST_WILDCARD_LISTENER") == "1" {
+		return "0.0.0.0"
+	}
+	return "127.0.0.1"
+}
 
 func occupiedLoopbackPort(t *testing.T) int {
 	t.Helper()
@@ -32,7 +42,7 @@ func TestStartListenerSkipsOccupiedLoopbackPort(t *testing.T) {
 	}
 	t.Cleanup(cfg.Close)
 	if err := cfg.Update(func(c *config.Config) {
-		c.Listen = "0.0.0.0"
+		c.Listen = testListenHost()
 		c.Port = occupied
 	}); err != nil {
 		t.Fatal(err)
@@ -78,12 +88,13 @@ func TestRestartListenerKeepsWorkingPortWhenLoopbackIsOccupied(t *testing.T) {
 	occupied := occupiedLoopbackPort(t)
 	srv, _ := libraryFixture(t)
 	t.Cleanup(srv.StopListener)
-	if err := srv.RestartListener("0.0.0.0", 0); err != nil {
+	host := testListenHost()
+	if err := srv.RestartListener(host, 0); err != nil {
 		t.Fatal(err)
 	}
 	active := srv.Port()
-	if err := srv.RestartListener("0.0.0.0", occupied); err == nil {
-		t.Fatal("wildcard bind succeeded despite an occupied loopback port")
+	if err := srv.RestartListener(host, occupied); err == nil {
+		t.Fatal("bind succeeded despite an occupied loopback port")
 	}
 	if !srv.Running() || srv.Port() != active || active == 0 {
 		t.Fatalf("old listener port %d was not kept: port=%d", active, srv.Port())

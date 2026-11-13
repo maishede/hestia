@@ -317,13 +317,15 @@ type FolderSummary struct {
 	IsNew      bool      `json:"isNew,omitempty"`
 }
 
-// 封面统一走文件夹端点：有图重定向原图（带缩放），无图由服务端 ffmpeg 抽帧。
+// 有海报时直接请求缩略图，视频封面由服务端抽帧。
 func (s *Store) folderSummary(f *Folder) FolderSummary {
 	sum := FolderSummary{
 		ID: f.ID, Name: f.Name, VideoCount: f.VideoCount, ImageCount: f.ImageCount,
 		SubVideos: f.SubVideos, Mtime: f.Mtime, IsNew: isNew(f.Mtime),
 	}
-	if f.VideoCount > 0 || f.CoverID != "" {
+	if f.CoverID != "" {
+		sum.Cover = "/api/media/" + f.CoverID + "/image?w=480"
+	} else if f.SubVideos > 0 {
 		sum.Cover = "/api/folders/" + f.ID + "/cover?w=480"
 	}
 	return sum

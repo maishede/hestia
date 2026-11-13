@@ -1,8 +1,9 @@
 // 文件夹页：子文件夹和媒体分别分页
-import { api, post } from '../api.js'
+import { api } from '../api.js'
+import { mountFolderDelete } from '../delete-dialog.js'
 import { folderCard, mediaCard } from '../cards.js'
 import { pageSize, pager } from '../pagination.js'
-import { skeleton, emptyHTML, esc, sortBarEl, getSort, setSort, toast } from '../util.js'
+import { skeleton, emptyHTML, esc, sortBarEl, getSort, setSort } from '../util.js'
 
 export function FolderView(app, id) {
   const sort = getSort()
@@ -10,8 +11,6 @@ export function FolderView(app, id) {
   let folderPage = 1
   let mediaPage = 1
   let request
-  let disposed = false
-  let preview
 
   app.innerHTML = `<div class="page">
     <div id="crumb" class="breadcrumb"></div>
@@ -31,30 +30,14 @@ export function FolderView(app, id) {
       <h3 class="section-title">媒体</h3>
       <div id="grid" class="grid">${skeleton(8, true)}</div>
     </section>
-    <dialog class="delete-dialog" aria-labelledby="delete-title">
-      <form>
-        <h2 id="delete-title">删除文件夹中的媒体</h2>
-        <p id="delete-summary"></p>
-        <p id="delete-subfolders" class="delete-warning" hidden></p>
-        <label for="delete-reason">删除原因</label>
-        <input id="delete-reason" class="ipt" maxlength="80" required autocomplete="off">
-        <p id="delete-preview-name" class="delete-preview-name"></p>
-        <p id="delete-error" class="delete-warning" role="alert" hidden></p>
-        <div class="delete-actions">
-          <button class="btn ghost" type="button" id="delete-cancel">取消</button>
-          <button class="btn danger-fill" type="submit" id="delete-submit">确认删除</button>
-        </div>
-      </form>
-    </dialog>
   </div>`
 
   const root = app.firstElementChild
   const $ = sel => root.querySelector(sel)
   const grid = $('#grid')
   const folders = $('#fgrid')
-  const dialog = $('dialog')
-  const reason = $('#delete-reason')
   const deleteButton = $('#delete-media')
+  const disposeDelete = mountFolderDelete(root, deleteButton, id)
   const folderPager = pager(page => { folderPage = page; load() }, '子文件夹分页')
   const mediaPager = pager(page => { mediaPage = page; load() }, '媒体分页')
   folders.after(folderPager.nav)
@@ -100,68 +83,6 @@ export function FolderView(app, id) {
     }
   }
 
-  function updateNewName() {
-    const suffix = reason.value.trim()
-    $('#delete-preview-name').textContent = suffix ? `改名为「${preview.name}-${suffix}」` : ''
-  }
-  function deleteError(message) {
-    const error = $('#delete-error')
-    error.textContent = message
-    error.hidden = !message
-  }
-  deleteButton.onclick = async () => {
-    deleteButton.disabled = true
-    try {
-      preview = await api(`${url}/delete-preview`)
-      if (disposed) return
-      reason.value = ''
-      reason.disabled = submit.disabled = !preview.files
-      updateNewName()
-      deleteError('')
-      $('#delete-summary').textContent = preview.files
-        ? `将永久删除「${preview.name}」中的 ${preview.files} 个视频、图片或字幕文件，其他文件会保留。`
-        : `「${preview.name}」中没有可删除的直属媒体文件。`
-      const warning = $('#delete-subfolders')
-      warning.hidden = !preview.subfolders
-      warning.textContent = `发现 ${preview.subfolders} 个子文件夹或链接，里面的内容会保留。请手动检查是否需要处理。`
-      dialog.showModal()
-      const focus = preview.files ? reason : cancel
-      focus.focus()
-    } catch (error) {
-      if (!disposed) toast(error.message, 'err')
-    } finally {
-      deleteButton.disabled = false
-    }
-  }
-
-  const submit = $('#delete-submit')
-  const cancel = $('#delete-cancel')
-  reason.addEventListener('input', updateNewName)
-  cancel.onclick = () => dialog.close()
-  dialog.addEventListener('cancel', event => {
-    if (cancel.disabled) event.preventDefault()
-  })
-  dialog.querySelector('form').onsubmit = async event => {
-    event.preventDefault()
-    if (!preview?.files || submit.disabled) return
-    const value = reason.value.trim()
-    if (!value) { deleteError('请输入删除原因'); reason.focus(); return }
-    reason.disabled = submit.disabled = cancel.disabled = true
-    deleteError('')
-    try {
-      const result = await post(`${url}/delete`, { reason: value, token: preview.token })
-      if (disposed) return
-      dialog.close()
-      toast(result.warning || `已删除 ${result.files} 个媒体文件，文件夹已改名为「${result.name}」`,
-        result.warning ? 'err' : 'info', result.warning ? 6500 : 3200)
-      location.hash = `#/folder/${result.id}`
-    } catch (error) {
-      if (!disposed) deleteError(error.message)
-    } finally {
-      reason.disabled = submit.disabled = cancel.disabled = false
-    }
-  }
-
   $('#sortSlot').appendChild(sortBarEl(sort, [
     { key: 'name', label: '名称' },
     { key: 'mtime', label: '修改日期' },
@@ -175,9 +96,8 @@ export function FolderView(app, id) {
   load()
   return {
     destroy() {
-      disposed = true
       request?.abort()
-      if (dialog.open) dialog.close()
+      disposeDelete()
     },
   }
 }

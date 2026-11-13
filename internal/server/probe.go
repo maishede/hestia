@@ -59,8 +59,8 @@ type ProbeResult struct {
 	Subs     []index.SubStream
 }
 
-func RunFFprobe(ffprobe, path string) (*ProbeResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func runFFprobe(ctx context.Context, ffprobe, path string) (*ProbeResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobe,
 		"-v", "error", "-print_format", "json",

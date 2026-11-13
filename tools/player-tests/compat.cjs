@@ -22,9 +22,12 @@ async function main() {
     await page.locator('video').evaluate(v => { v.pause(); v.currentTime = 10 })
     const cdp = await ios.newCDPSession(page)
     const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] })
-    await touch('touchStart', 350, 350)
-    for (let i = 1; i <= 8; i++) { await touch('touchMove', 350, 350 - i * 12.5); await sleep(20) }
-    await touch('touchEnd', 350, 250)
+    const gesture = await page.locator('#gesture').boundingBox()
+    const x = gesture.x + gesture.width - 25
+    const y = gesture.y + gesture.height / 2
+    await touch('touchStart', x, y)
+    for (let i = 1; i <= 8; i++) { await touch('touchMove', x, y - i * 12.5); await sleep(20) }
+    await touch('touchEnd', x, y - 100)
     await sleep(300)
     assert.ok(await page.locator('video').evaluate(v => v.currentTime) > 20, 'iOS right-side vertical swipe seeks')
     assert.equal(await page.locator('.xgplayer-volume').count(), 0, 'iOS uses the device volume buttons')

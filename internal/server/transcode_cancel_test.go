@@ -21,7 +21,19 @@ import (
 // The test binary acts as a slow ffmpeg process until it is killed.
 func init() {
 	if mode := os.Getenv("HESTIA_TEST_BLOCK_TRANSCODER_CHILD"); mode != "" {
-		if mode == "ready" {
+		if mode == "hold-source" {
+			for i, arg := range os.Args {
+				if arg == "-i" && i+1 < len(os.Args) {
+					f, err := os.Open(os.Args[i+1])
+					if err != nil {
+						os.Exit(2)
+					}
+					defer f.Close()
+					break
+				}
+			}
+		}
+		if mode == "ready" || mode == "hold-source" {
 			_ = os.WriteFile(os.Args[len(os.Args)-1], []byte("#EXTM3U\n"), 0o644)
 		}
 		time.Sleep(time.Minute)

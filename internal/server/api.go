@@ -83,8 +83,17 @@ func (s *Server) ensureProbed(w http.ResponseWriter, r *http.Request, id string)
 		return m, abs
 	}
 	if !m.Probed && s.tc.FFprobeOK() {
+		ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+		if !ok {
+			return index.Media{}, ""
+		}
+		defer endRead()
 		lib, _ := s.store.GetLibrary(m.LibraryID)
-		if res, err := RunFFprobe(s.tc.FFprobe, abs); err == nil {
+		res, err := runFFprobe(ctx, s.tc.FFprobe, abs)
+		if mediaReadCanceled(ctx, w, r) {
+			return index.Media{}, ""
+		}
+		if err == nil {
 			s.store.SetProbeResult(lib.Path, &m, &index.ProbeInfo{
 				Duration: res.Duration, VCodec: res.VCodec, ACodec: res.ACodec,
 				Width: res.Width, Height: res.Height, Subs: res.Subs,
@@ -107,8 +116,10 @@ func (s *Server) handleMediaDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	prev, next := s.store.Siblings(id)
 	folderName := ""
+	canDelete := false
 	if f, ok := s.store.GetFolder(m.FolderID); ok {
 		folderName = f.Name
+		canDelete = localLibraryAccess(r)
 	}
 	// 字幕：外挂（同名 srt/ass）+ 内嵌（文本轨）
 	extSubs := []map[string]string{}
@@ -125,6 +136,7 @@ func (s *Server) handleMediaDetail(w http.ResponseWriter, r *http.Request) {
 		"id": m.ID, "kind": m.Kind.String(), "name": m.Name, "size": m.Size,
 		"mtime": m.Mtime, "duration": m.Duration,
 		"vcodec": m.VCodec, "acodec": m.ACodec, "width": m.Width, "height": m.Height,
+		"folderId": m.FolderID, "canDelete": canDelete,
 		"folderName": folderName,
 		"stream":     "/api/media/" + m.ID + "/stream",
 		"playback": map[string]any{
@@ -138,16 +150,22 @@ func (s *Server) handleMediaDetail(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTranscodeReserve(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, _, err := s.store.ResolveMedia(id); err != nil {
+	m, ok := s.store.GetMedia(id)
+	if !ok {
 		errJSON(w, http.StatusNotFound, "媒体不存在")
 		return
 	}
+	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return
+	}
+	defer endRead()
 	sid, err := s.tr.Reserve(id)
 	if err != nil {
 		errJSON(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	if r.Context().Err() != nil {
+	if mediaReadCanceled(ctx, w, r) {
 		s.tr.Stop(sid)
 		return
 	}
@@ -168,13 +186,19 @@ func (s *Server) handleTranscodeStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, _, err := s.store.ResolveMedia(id); err != nil {
+	m, ok := s.store.GetMedia(id)
+	if !ok {
 		errJSON(w, http.StatusNotFound, "媒体不存在")
 		return
 	}
-	sess, err := s.tr.Start(r.Context(), id, body.Start, body.SessionID)
+	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return
+	}
+	defer endRead()
+	sess, err := s.tr.Start(ctx, id, body.Start, body.SessionID)
 	if err != nil {
-		if r.Context().Err() != nil {
+		if mediaReadCanceled(ctx, w, r) {
 			return
 		}
 		if errors.Is(err, errReservationGone) || errors.Is(err, errTranscodeStopped) {
@@ -184,7 +208,7 @@ func (s *Server) handleTranscodeStart(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	if r.Context().Err() != nil {
+	if mediaReadCanceled(ctx, w, r) {
 		s.tr.Stop(sess.ID)
 		return
 	}

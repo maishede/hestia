@@ -197,6 +197,18 @@ func TestDeleteOnlyDirectMediaAndRename(t *testing.T) {
 	if kept, ok := srv.prog.Get(keptID); !ok || kept.Position != 42 {
 		t.Error("child video's progress was not preserved")
 	}
+	for _, id := range []string{videoID, childVideoID} {
+		data, _ := json.Marshal(progress.Entry{MediaID: id, Position: 48})
+		if r := localLibraryRequest(srv, "POST", "/api/progress", string(data)); r.Code != http.StatusNoContent {
+			t.Fatalf("late progress returned %d", r.Code)
+		}
+	}
+	if kept, ok := srv.prog.Get(keptID); !ok || kept.Position != 48 {
+		t.Error("late progress from a buffered child video did not follow the renamed folder")
+	}
+	if _, ok := srv.prog.Get(videoID); ok {
+		t.Error("late progress recreated a deleted video's entry")
+	}
 }
 
 func TestDeleteDirectSubtitlesWithOnlyNestedVideos(t *testing.T) {

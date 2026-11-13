@@ -1,6 +1,7 @@
 // 播放器页：手势 + 倍速 + 断点续播 + 转码兜底
 import { api, post } from '../api.js'
-import { icon, fmtDur, toast, clamp, esc } from '../util.js'
+import { mountFolderDelete } from '../delete-dialog.js'
+import { icon, fmtDur, fmtSize, toast, clamp, esc } from '../util.js'
 
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -32,7 +33,7 @@ function ensureHls() {
 }
 
 export async function PlayerView(app, id, isCurrent = () => true) {
-  document.body.classList.add('player-mode')
+  app.innerHTML = '<div class="empty-state"><p>正在加载视频…</p></div>'
   const [meta, XGPlayer] = await Promise.all([
     api(`/api/media/${id}`).catch(e => { throw new Error(e.message || '视频不存在或已被移除') }),
     ensurePlayer(),
@@ -63,7 +64,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     <div id="gesture"></div>
     <div class="hud" id="hud"><span id="hud-ico"></span><span class="hud-text" id="hud-text"></span><div class="hud-bar" id="hud-bar" style="display:none"><i id="hud-bar-i"></i></div></div>
     <div class="p-top">
-      <button class="pbtn" id="btn-back" title="返回">${icon('back', 21)}</button>
+      <button class="pbtn" id="btn-back" title="返回" aria-label="返回">${icon('back', 21)}</button>
       <div class="p-title">${esc(meta.name)}${meta.folderName ? ` <span style="opacity:.55;font-weight:400">· ${esc(meta.folderName)}</span>` : ''}</div>
       <span class="tc-chip" id="tc-chip" hidden>转码</span>
     </div>
@@ -90,7 +91,20 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       <div id="err-text">播放失败</div>
       <button class="btn" id="err-retry">用转码模式重试</button>
     </div>`
-  app.appendChild(root)
+  const detail = document.createElement('section')
+  detail.className = 'media-detail'
+  const properties = [fmtDur(meta.duration), fmtSize(meta.size)].filter(Boolean).join(' · ')
+  detail.innerHTML = `
+    <div class="detail-header">
+      <a class="btn ghost sm" href="${meta.folderId ? `#/folder/${esc(meta.folderId)}` : '#/'}">${meta.folderId ? '返回文件夹' : '返回媒体库'}</a>
+      <div class="detail-title">
+        <h1>${esc(meta.name)}</h1>
+        <p>${esc([meta.folderName, properties].filter(Boolean).join(' · '))}</p>
+      </div>
+      ${meta.canDelete ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
+    </div>`
+  detail.appendChild(root)
+  app.replaceChildren(detail)
 
   const $ = s => root.querySelector(s)
   const savedVolume = Number.parseFloat(localStorage.getItem('hestia.volume') ?? '1')
@@ -106,7 +120,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   // Hestia owns source switching so xgplayer never overwrites the HLS MediaSource.
   player.handleSource = false
   await player.start()
-  if (!isCurrent()) { player.destroy(); root.remove(); return null }
+  if (!isCurrent()) { player.destroy(); detail.remove(); return null }
   const leftGrid = $('xg-left-grid'), rightGrid = $('xg-right-grid')
   if (meta.prev) leftGrid.insertAdjacentHTML('afterbegin', `<button class="pbtn" id="btn-prev" title="上一个">${icon('back', 17)}</button>`)
   if (meta.next) leftGrid.insertAdjacentHTML('beforeend', `<button class="pbtn" id="btn-next" title="下一个">${icon('fwd', 17)}</button>`)
@@ -132,6 +146,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   let resumeShown = false
   let lastSave = 0
   let destroyed = false
+  let playbackStopped = false
   let pageHidden = false
   let sourceGeneration = 0
   let pendingHlsSeek = null // 原视频时间与播放意图，不受切源时 video 清零/暂停影响
@@ -210,6 +225,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   function cancelHlsSeek() { clearTimeout(hlsSeekTimer); hlsSeekTimer = null }
 
   async function startHLS(startAt, shouldPlay = true, recoverMissingSession = true) {
+    if (playbackStopped || destroyed) return
     if (!meta.playback.transcodeAvailable) throw new Error('服务端未找到 ffmpeg，无法转码（可将 ffmpeg 放到程序同目录或加入 PATH）')
     cancelHlsSeek()
     const generation = ++sourceGeneration
@@ -492,7 +508,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       if (pendingHlsSeek) pendingHlsSeek.shouldPlay = false
     }
     showControls()
-    saveProgress()
+    if (!playbackStopped) saveProgress()
   })
   vid.addEventListener('ended', () => {
     localStorage.removeItem(pKey)
@@ -500,7 +516,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     if (meta.next) toast(`已播完 · 下一个：《${meta.next.name}》`)
   })
   vid.addEventListener('error', () => {
-    if (!vid.error || sourceChanging || destroyed || pageHidden) return
+    if (!vid.error || sourceChanging || destroyed || playbackStopped || pageHidden) return
     if (mode === 'hls') {
       // MSE errors are handled by hls.js. Native HLS reports errors here.
       if (nativeSource && !pendingHlsSeek) handleNativeHlsError()
@@ -530,7 +546,8 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   }
 
   $('#err-retry').addEventListener('click', () => {
-    startHLS(curTime() || 0).catch(e => showError(e.message))
+    if (playbackStopped) window.location.reload()
+    else startHLS(curTime() || 0).catch(e => showError(e.message))
   })
   // 点击字幕菜单以外的任意位置时收起。
   root.addEventListener('click', e => {
@@ -657,7 +674,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     if (g.lp) return
     if (!g.mode) {
       if (ady > 12 && ady > adx * 1.2) {
-        g.mode = e.clientX < root.clientWidth / 2 ? 'bright' : (isIOS ? 'vseek' : 'vol')
+        g.mode = e.clientX - root.getBoundingClientRect().left < root.clientWidth / 2 ? 'bright' : (isIOS ? 'vseek' : 'vol')
       } else if (adx > 18 && adx > ady * 1.2) {
         g.mode = 'seek'
         g.vh = 'h'
@@ -701,7 +718,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     } else if (g.mode === 'vol') {
       hideHUD(700)
     } else if (!g.moved && !canceled) {
-      handleTap(e.clientX)
+      handleTap(e.clientX - root.getBoundingClientRect().left)
     }
   }
   gesture.addEventListener('pointerup', e => endPointer(e, false))
@@ -733,7 +750,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
 
   // ---------- 键盘 ----------
   const onKey = e => {
-    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return
+    if (playbackStopped || e.target?.closest?.('input, textarea, select, dialog')) return
     switch (e.key) {
       case ' ': case 'k': e.preventDefault(); togglePlay(); break
       case 'ArrowLeft': seekTo(curTime() - 5); break
@@ -754,10 +771,10 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     ++sourceGeneration
     cancelHlsSeek()
     stopSession()
-    saveProgress(true)
+    if (!playbackStopped) saveProgress(true)
   }
   const onPageShow = e => {
-    if (!e.persisted || !pageHidden || destroyed) return
+    if (!e.persisted || !pageHidden || destroyed || playbackStopped) return
     pageHidden = false
     if (mode === 'hls' || sourceChanging) {
       const shouldPlay = pendingHlsSeek ? pendingHlsSeek.shouldPlay : !vid.paused
@@ -766,6 +783,27 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   }
   window.addEventListener('pagehide', onPageHide)
   window.addEventListener('pageshow', onPageShow)
+
+  function releasePlayback() {
+    if (playbackStopped) return
+    playbackStopped = true
+    ++sourceGeneration
+    cancelHlsSeek()
+    saveProgress()
+    destroyHLS()
+    stopSession()
+    vid.pause()
+    vid.removeAttribute('src')
+    vid.load()
+  }
+
+  const deleteButton = detail.querySelector('#detail-delete')
+  const disposeDelete = deleteButton && mountFolderDelete(detail, deleteButton, meta.folderId, () => {
+    releasePlayback()
+    root.classList.remove('loading')
+    showError('播放已停止')
+    $('#err-retry').textContent = '重新打开视频'
+  })
 
   // ---------- 启动 ----------
   if (meta.playback.mode === 'transcode') {
@@ -777,19 +815,18 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   return {
     destroy() {
       destroyed = true
-      ++sourceGeneration
-      cancelHlsSeek()
-      saveProgress()
+      releasePlayback()
       document.removeEventListener('keydown', onKey)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
-      destroyHLS()
-      stopSession()
+      disposeDelete?.()
       player.destroy()
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
+      if (document.fullscreenElement === root) document.exitFullscreen().catch(() => {})
       clearTimeout(controlsTimer)
       clearTimeout(hudTimer)
-      root.remove()
+      clearTimeout(ptr?.lpTimer)
+      clearTimeout(tapInfo?.timer)
+      detail.remove()
     },
   }
 }

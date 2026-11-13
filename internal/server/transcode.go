@@ -24,8 +24,10 @@ type TranscodeSession struct {
 	Start     float64   `json:"start"`
 	CreatedAt time.Time `json:"createdAt"`
 
+	sourcePath     string
 	cmd            *exec.Cmd
-	done           chan error
+	done           chan struct{}
+	waitErr        error
 	lastAccess     time.Time
 	unclaimedUntil time.Time
 }
@@ -50,6 +52,7 @@ var errTranscodeStopped = errors.New("转码会话已停止")
 type Transcoder struct {
 	mu           sync.Mutex
 	sessions     map[string]*TranscodeSession
+	stopping     map[string]*TranscodeSession
 	reservations map[string]transcodeReservation
 	ffmpeg       string
 	dataDir      string
@@ -63,6 +66,7 @@ type Transcoder struct {
 func NewTranscoder(ffmpeg, dataDir string, resolve func(string) (string, error)) *Transcoder {
 	t := &Transcoder{
 		sessions:     map[string]*TranscodeSession{},
+		stopping:     map[string]*TranscodeSession{},
 		reservations: map[string]transcodeReservation{},
 		ffmpeg:       ffmpeg,
 		dataDir:      dataDir,
@@ -153,6 +157,9 @@ func (t *Transcoder) newSIDLocked() string {
 		if _, exists := t.sessions[id]; exists {
 			continue
 		}
+		if _, exists := t.stopping[id]; exists {
+			continue
+		}
 		if _, exists := t.reservations[id]; !exists {
 			return id
 		}
@@ -240,9 +247,15 @@ func (t *Transcoder) Start(ctx context.Context, mediaID string, startSec float64
 	s := &TranscodeSession{
 		ID: sid, MediaID: mediaID, Dir: dir, Start: startSec,
 		CreatedAt: time.Now(), lastAccess: time.Now(),
-		cmd: cmd, done: make(chan error, 1),
+		sourcePath: abs, cmd: cmd, done: make(chan struct{}),
 	}
-	go func() { s.done <- cmd.Wait() }()
+	go func() {
+		s.waitErr = cmd.Wait()
+		close(s.done)
+		t.mu.Lock()
+		delete(t.stopping, s.ID)
+		t.mu.Unlock()
+	}()
 	t.sessions[sid] = s
 	t.mu.Unlock()
 
@@ -261,7 +274,7 @@ func (t *Transcoder) Start(ctx context.Context, mediaID string, startSec float64
 			return t.finishStart(ctx, s, reservationID != "")
 		}
 		select {
-		case err := <-s.done:
+		case <-s.done:
 			// 小文件可能在首次轮询前就全部转完并正常退出
 			if _, statErr := os.Stat(playlist); statErr == nil {
 				return t.finishStart(ctx, s, reservationID != "")
@@ -280,7 +293,7 @@ func (t *Transcoder) Start(ctx context.Context, mediaID string, startSec float64
 				tail = tail[len(tail)-400:]
 			}
 			_ = os.RemoveAll(dir)
-			if err != nil {
+			if s.waitErr != nil {
 				return nil, fmt.Errorf("ffmpeg 失败: %s", tail)
 			}
 			return nil, fmt.Errorf("转码异常结束: %s", tail)
@@ -348,6 +361,38 @@ func (t *Transcoder) Stop(sid string) {
 	}
 }
 
+// stopMatching cancels pending starts and waits for the matching FFmpeg
+// processes to release their source files.
+func (t *Transcoder) stopMatching(ctx context.Context, matches func(mediaID, sourcePath string) bool) error {
+	t.mu.Lock()
+	for id, reservation := range t.reservations {
+		if matches(reservation.mediaID, "") {
+			delete(t.reservations, id)
+		}
+	}
+	var stopped []*TranscodeSession
+	for _, session := range t.stopping {
+		if matches(session.MediaID, session.sourcePath) {
+			stopped = append(stopped, session)
+		}
+	}
+	for _, session := range t.sessions {
+		if matches(session.MediaID, session.sourcePath) {
+			t.killLocked(session, true)
+			stopped = append(stopped, session)
+		}
+	}
+	t.mu.Unlock()
+	for _, session := range stopped {
+		select {
+		case <-session.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 func (t *Transcoder) StopAll() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -367,11 +412,19 @@ func (t *Transcoder) Active() int {
 func (t *Transcoder) killLocked(s *TranscodeSession, async bool) {
 	delete(t.sessions, s.ID)
 	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+		select {
+		case <-s.done:
+		default:
+			t.stopping[s.ID] = s
+			_ = s.cmd.Process.Kill()
+		}
 	}
 	dir := s.Dir
 	if async {
 		go func() {
+			if s.done != nil {
+				<-s.done
+			}
 			time.Sleep(2 * time.Second)
 			_ = os.RemoveAll(dir)
 		}()

@@ -41,13 +41,17 @@ type Server struct {
 	requestedPort int
 	listen        string
 
-	subMu sync.Mutex // 串行化 ffmpeg 字幕提取/封面抽帧（家用带宽足够，避免磁盘抖动）
+	mediaAccess mediaAccess
+	imageJobs   imageJobs
+	imageSlots  chan struct{}
+	frameSlots  chan struct{}
+	subMu       sync.Mutex // 串行化 ffmpeg 字幕提取
 }
 
 func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, prog *progress.Store, dataDir string, webFS fs.FS, logger *log.Logger) (*Server, error) {
 	s := &Server{
 		cfg: cfg, store: store, tc: tc, tr: tr, prog: prog, dataDir: dataDir, logger: logger,
-		mux: http.NewServeMux(),
+		mux: http.NewServeMux(), imageSlots: make(chan struct{}, 2), frameSlots: make(chan struct{}, 2),
 	}
 	assets, err := fs.Sub(webFS, "assets")
 	if err != nil {

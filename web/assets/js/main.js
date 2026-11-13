@@ -33,7 +33,7 @@ async function route() {
       window.scrollTo(0, 0)
       document.getElementById('searchInput').blur()
       try {
-        const view = r.view === PlayerView
+        const view = r.view === PlayerView || r.view === ImageView
           ? await r.view(app, ...m.slice(1), () => generation === routeGeneration)
           : await r.view(app, ...m.slice(1))
         if (generation !== routeGeneration) {

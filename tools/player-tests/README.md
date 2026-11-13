@@ -9,5 +9,8 @@
 5. 依次运行 `node tools/player-tests/integration.cjs`、`node tools/player-tests/races.cjs`、`node tools/player-tests/play-intent.cjs`、`node tools/player-tests/compat.cjs`、`node tools/player-tests/close-session.cjs` 和 `node tools/player-tests/close-order.cjs`。
 6. 运行 `node --test tools/player-tests/transcode-playback.cjs tools/player-tests/progress.cjs`，验证转码起播位置、会话失效恢复、10 位 HEVC 转码与断点进度。运行 `node tools/player-tests/close-session.cjs --lost-cancel` 可模拟取消请求丢失，验证服务端独立回收。
 7. 运行 `node tools/player-tests/speed-menu.cjs`，验证桌面鼠标移出倍速按钮后仍可选中倍速。
+8. 删除回归使用单独的临时库。创建名为 `hestia-detail-delete-fixture` 的目录，放入 `DeleteFixture/delete-sample.mp4`、`delete-sample.srt`、宽度超过 480 像素的 `detail-image.png`、内容为 `Hestia deletion test fixture` 的 `fixture.txt`，以及 `DeleteFixture/子目录/keep.mp4`。将 `HESTIA_DETAIL_DELETE_FIXTURE` 指向临时库，并启动只挂载该目录的本机测试服务后运行 `node tools/player-tests/detail-delete.cjs`。
 
 这些测试拦截外站请求，并覆盖真实转码、字幕偏移、进度、触控和会话清理。`compat.cjs` 的 iOS 分支使用 Chromium 模拟 UA/触控；它不能替代实体 iPhone 和 Safari 验证。
+
+Go 的端口测试默认只监听本机回环地址。需要复验 Windows 的所有网卡绑定冲突时，可单独设置 `HESTIA_TEST_WILDCARD_LISTENER=1` 运行端口测试。此模式可能触发 Windows 防火墙提示。

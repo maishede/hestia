@@ -209,11 +209,21 @@ func destinationAvailable(parent *os.Root, name string) error {
 	return nil
 }
 
-func (s *Store) DeleteFolderMedia(id, reason, token string) (FolderDeletion, error) {
+func (s *Store) DeleteFolderMedia(id, reason, token string, prepare func(folderPath string, folderIDs []string) (func(), error)) (FolderDeletion, error) {
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 
-	result, err := s.deleteFolderMedia(id, reason, token)
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	result, err := s.deleteFolderMedia(id, reason, token, func(folderPath string, folderIDs []string) error {
+		var err error
+		release, err = prepare(folderPath, folderIDs)
+		return err
+	})
 	if err != nil {
 		return FolderDeletion{}, err
 	}
@@ -226,7 +236,7 @@ func (s *Store) DeleteFolderMedia(id, reason, token string) (FolderDeletion, err
 	return result, nil
 }
 
-func (s *Store) deleteFolderMedia(id, reason, token string) (FolderDeletion, error) {
+func (s *Store) deleteFolderMedia(id, reason, token string, prepare func(folderPath string, folderIDs []string) error) (FolderDeletion, error) {
 	s.libraryMu.Lock()
 	defer s.libraryMu.Unlock()
 
@@ -254,6 +264,22 @@ func (s *Store) deleteFolderMedia(id, reason, token string) (FolderDeletion, err
 	}
 	if err := destinationAvailable(target.parent, name); err != nil {
 		return FolderDeletion{}, err
+	}
+	if err := prepare(target.dir.Name(), s.folderTreeIDs(target.folder)); err != nil {
+		return FolderDeletion{}, err
+	}
+	confirmedFiles := files
+	preview, files, err = target.preview()
+	if err != nil {
+		return FolderDeletion{}, err
+	}
+	if preview.Token != token {
+		return FolderDeletion{}, fmt.Errorf("%w：文件夹内容已变化，请重新确认", ErrDeleteConflict)
+	}
+	for i, file := range files {
+		if !os.SameFile(file, confirmedFiles[i]) {
+			return FolderDeletion{}, fmt.Errorf("%w：文件夹内容已变化，请重新确认", ErrDeleteConflict)
+		}
 	}
 
 	// Move only the confirmed files out of the folder so a failed rename can be
@@ -353,6 +379,18 @@ func (s *Store) deleteFolderMedia(id, reason, token string) (FolderDeletion, err
 		result.Warning = "文件夹已改名，请检查临时目录 " + stagePath
 	}
 	return result, nil
+}
+
+func (s *Store) folderTreeIDs(root Folder) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := []string{root.ID}
+	for _, folder := range s.folders {
+		if folder.LibraryID == root.LibraryID && strings.HasPrefix(folder.RelPath, root.RelPath+"/") {
+			ids = append(ids, folder.ID)
+		}
+	}
+	return ids
 }
 
 func (f *folderTarget) reopen(name string) error {

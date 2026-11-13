@@ -7,7 +7,9 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
+	"syscall"
 
 	"hestia/internal/index"
 )
@@ -75,7 +77,9 @@ func (s *Server) handleFolderDelete(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	result, err := s.store.DeleteFolderMedia(r.PathValue("id"), body.Reason, body.Token)
+	result, err := s.store.DeleteFolderMedia(r.PathValue("id"), body.Reason, body.Token, func(folderPath string, folderIDs []string) (func(), error) {
+		return s.prepareFolderDeletion(r.Context(), folderPath, folderIDs)
+	})
 	if err != nil {
 		s.folderDeleteError(w, err)
 		return
@@ -90,10 +94,18 @@ func (s *Server) folderDeleteError(w http.ResponseWriter, err error) {
 		errJSON(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, index.ErrDeleteReason):
 		errJSON(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, index.ErrDeleteConflict):
+	case errors.Is(err, index.ErrDeleteConflict), errors.Is(err, errMediaInUse), errors.Is(err, errFolderDeleting):
 		errJSON(w, http.StatusConflict, err.Error())
+	case runtime.GOOS == "windows" && (errors.Is(err, windowsSharingViolation) || errors.Is(err, windowsLockViolation)):
+		s.logger.Printf("删除媒体文件时遇到占用: %v", err)
+		errJSON(w, http.StatusConflict, "文件仍被其他程序占用。关闭正在读取该目录的程序后重试。"+err.Error())
 	default:
 		s.logger.Printf("删除媒体文件操作失败: %v", err)
 		errJSON(w, http.StatusConflict, "无法处理该文件夹，请检查文件是否被占用及目录权限。"+err.Error())
 	}
 }
+
+const (
+	windowsSharingViolation = syscall.Errno(32)
+	windowsLockViolation    = syscall.Errno(33)
+)

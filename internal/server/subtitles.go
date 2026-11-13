@@ -152,7 +152,17 @@ func (s *Server) handleSubtitle(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "字幕不存在")
 		return
 	}
+	ctx, endRead, ok := s.beginMediaRead(w, r, sub.FolderID)
+	if !ok {
+		return
+	}
 	raw, err := os.ReadFile(abs)
+	canceled := ctx.Err() != nil
+	endRead()
+	if canceled {
+		mediaReadCanceled(ctx, w, r)
+		return
+	}
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "字幕文件无法读取")
 		return
@@ -292,7 +302,11 @@ func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
 		writeSubtitle(w, b, offset)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	readCtx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(readCtx, 60*time.Second)
 	defer cancel()
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, s.tc.FFmpeg,
@@ -300,7 +314,15 @@ func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
 		"-i", abs, "-map", "0:"+strconv.Itoa(idx), "-y", cache)
 	hideChildWindow(cmd)
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	canceled := readCtx.Err() != nil
+	endRead()
+	if canceled {
+		_ = os.Remove(cache)
+		mediaReadCanceled(readCtx, w, r)
+		return
+	}
+	if runErr != nil {
 		_ = os.Remove(cache)
 		tail := stderr.String()
 		if len(tail) > 300 {
@@ -319,7 +341,7 @@ func (s *Server) handleEmbeddedSub(w http.ResponseWriter, r *http.Request) {
 
 // ---------- 无图封面：视频抽帧 ----------
 
-// handleFolderCover 文件夹封面统一入口：有图 → 图片端点；无图 → 抽首个视频帧。
+// handleFolderCover retains the folder endpoint for older clients.
 func (s *Server) handleFolderCover(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	f, ok := s.store.GetFolder(id)
@@ -335,61 +357,19 @@ func (s *Server) handleFolderCover(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 		return
 	}
-	vid, has := s.store.FirstVideoInTree(id)
-	if !has || !s.tc.FFmpegOK() {
+	vid, ok := s.store.FirstVideoInTree(id)
+	if !ok {
 		errJSON(w, http.StatusNotFound, "无可用封面")
 		return
 	}
-	abs, m, err := s.store.ResolveMedia(vid)
-	if err != nil {
-		errJSON(w, http.StatusNotFound, "无可用封面")
-		return
-	}
-	cacheDir := filepath.Join(s.dataDir, "cache", "fcover")
-	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d.jpg", id, m.Mtime.Unix()))
-	if b, err := os.ReadFile(cache); err == nil {
-		serveJPEG(w, b)
-		return
-	}
-	_ = os.MkdirAll(cacheDir, 0o755)
-	s.subMu.Lock()
-	defer s.subMu.Unlock()
-	if b, err := os.ReadFile(cache); err == nil {
-		serveJPEG(w, b)
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-	defer cancel()
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, s.tc.FFmpeg,
-		"-nostdin", "-hide_banner", "-loglevel", "error",
-		"-ss", "3", "-i", abs, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-y", cache)
-	hideChildWindow(cmd)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		_ = os.Remove(cache)
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte("封面生成失败"))
-		return
-	}
-	b, err := os.ReadFile(cache)
-	if err != nil {
-		errJSON(w, http.StatusNotFound, "封面生成失败")
-		return
-	}
-	serveJPEG(w, b)
+	s.serveVideoFrame(w, r, vid)
 }
 
-func serveJPEG(w http.ResponseWriter, b []byte) {
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(b)
-}
-
-// handleMediaThumb 视频卡片缩略图：优先取已缓存抽帧，否则用 ffmpeg 抽 3 秒处一帧。
 func (s *Server) handleMediaThumb(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	s.serveVideoFrame(w, r, r.PathValue("id"))
+}
+
+func (s *Server) serveVideoFrame(w http.ResponseWriter, r *http.Request, id string) {
 	abs, m, err := s.store.ResolveMedia(id)
 	if err != nil || m.Kind != index.KindVideo {
 		errJSON(w, http.StatusNotFound, "视频不存在")
@@ -399,53 +379,69 @@ func (s *Server) handleMediaThumb(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusServiceUnavailable, "未找到 ffmpeg")
 		return
 	}
-	cacheDir := filepath.Join(s.dataDir, "cache", "thumb")
-	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", id, m.Size, m.Mtime.Unix()))
-	if b, err := os.ReadFile(cache); err == nil {
-		serveJPEG(w, b)
-		return
-	}
-	_ = os.MkdirAll(cacheDir, 0o755)
-	s.subMu.Lock()
-	defer s.subMu.Unlock()
-	if b, err := os.ReadFile(cache); err == nil { // 双重检查
-		serveJPEG(w, b)
-		return
-	}
-	run := func(seek string) error {
-		args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
-		if seek != "" {
-			args = append(args, "-ss", seek)
-		}
-		args = append(args, "-i", abs, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-y", cache)
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, s.tc.FFmpeg, args...)
-		hideChildWindow(cmd)
-		return cmd.Run()
-	}
-	// 时长不足 3 秒的短视频直接取首帧
-	seek := "3"
-	if m.Duration > 0 && m.Duration < 3 {
-		seek = ""
-	}
-	if err := run(seek); err != nil {
-		_ = os.Remove(cache)
-		if seek != "" { // 3 秒处抽帧失败（片头过短/损坏）时退回首帧
-			if err2 := run(""); err2 != nil {
-				_ = os.Remove(cache)
-				errJSON(w, http.StatusNotFound, "缩略图生成失败")
-				return
-			}
-		} else {
-			errJSON(w, http.StatusNotFound, "缩略图生成失败")
-			return
-		}
-	}
-	b, err := os.ReadFile(cache)
+	data, err := s.videoThumbnail(w, r, abs, m)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "缩略图生成失败")
 		return
 	}
-	serveJPEG(w, b)
+	if len(data) > 0 {
+		serveJPEG(w, data)
+	}
+}
+
+func (s *Server) videoThumbnail(w http.ResponseWriter, r *http.Request, abs string, m index.Media) ([]byte, error) {
+	cacheDir := filepath.Join(s.dataDir, "cache", "thumb")
+	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", m.ID, m.Size, m.Mtime.Unix()))
+	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
+		return b, nil
+	}
+	unlock, ok := s.imageJobs.lock(r.Context(), cache)
+	if !ok {
+		return nil, nil
+	}
+	defer unlock()
+	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
+		return b, nil
+	}
+	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return nil, nil
+	}
+	defer endRead()
+	select {
+	case s.frameSlots <- struct{}{}:
+		defer func() { <-s.frameSlots }()
+	case <-ctx.Done():
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	run := func(seek bool) ([]byte, error) {
+		args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "2"}
+		if seek {
+			args = append(args, "-ss", "3")
+		}
+		args = append(args, "-i", abs, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5",
+			"-threads", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1")
+		cmd := exec.CommandContext(ctx, s.tc.FFmpeg, args...)
+		hideChildWindow(cmd)
+		return cmd.Output()
+	}
+	seek := m.Duration <= 0 || m.Duration >= 3
+	data, err := run(seek)
+	if seek && ctx.Err() == nil && (err != nil || len(data) == 0) {
+		data, err = run(false)
+	}
+	if err != nil || len(data) == 0 {
+		return nil, fmt.Errorf("无法抽取视频帧")
+	}
+	writeThumbnailCache(cache, data)
+	return data, nil
+}
+
+func serveJPEG(w http.ResponseWriter, b []byte) {
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(b)
 }

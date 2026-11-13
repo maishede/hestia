@@ -21,12 +21,18 @@ type Entry struct {
 }
 
 type Store struct {
-	mu    sync.Mutex
-	path  string
-	m     map[string]*Entry
-	dirty bool
-	stop  chan struct{}
-	wg    sync.WaitGroup
+	mu      sync.Mutex
+	path    string
+	m       map[string]*Entry
+	renamed map[string]mediaRedirect
+	dirty   bool
+	stop    chan struct{}
+	wg      sync.WaitGroup
+}
+
+type mediaRedirect struct {
+	to      string // empty when the source was removed
+	expires time.Time
 }
 
 func New(dataDir string) (*Store, error) {
@@ -94,14 +100,19 @@ func (s *Store) Set(e Entry) {
 	}
 	e.UpdatedAt = time.Now().UnixMilli()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	e.MediaID = s.redirectID(e.MediaID)
+	if e.MediaID == "" {
+		return
+	}
 	s.m[e.MediaID] = &e
 	s.dirty = true
-	s.mu.Unlock()
 }
 
 func (s *Store) Get(mediaID string) (Entry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	mediaID = s.redirectID(mediaID)
 	if e, ok := s.m[mediaID]; ok {
 		return *e, true
 	}
@@ -110,6 +121,7 @@ func (s *Store) Get(mediaID string) (Entry, bool) {
 
 func (s *Store) Delete(mediaID string) {
 	s.mu.Lock()
+	mediaID = s.redirectID(mediaID)
 	if _, ok := s.m[mediaID]; ok {
 		delete(s.m, mediaID)
 		s.dirty = true
@@ -122,15 +134,30 @@ func (s *Store) Delete(mediaID string) {
 func (s *Store) UpdateMediaIDs(removed []string, moved map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	if s.renamed == nil {
+		s.renamed = make(map[string]mediaRedirect)
+	}
+	for id, redirect := range s.renamed {
+		if !now.Before(redirect.expires) {
+			delete(s.renamed, id)
+		}
+	}
+	expires := now.Add(2 * time.Hour)
 	for _, id := range removed {
+		s.renamed[id] = mediaRedirect{expires: expires}
 		if _, ok := s.m[id]; ok {
 			delete(s.m, id)
 			s.dirty = true
 		}
 	}
 	for oldID, newID := range moved {
+		if oldID == newID {
+			continue
+		}
+		s.renamed[oldID] = mediaRedirect{to: newID, expires: expires}
 		entry, ok := s.m[oldID]
-		if !ok || oldID == newID {
+		if !ok {
 			continue
 		}
 		if existing := s.m[newID]; existing == nil || existing.UpdatedAt < entry.UpdatedAt {
@@ -140,6 +167,27 @@ func (s *Store) UpdateMediaIDs(removed []string, moved map[string]string) {
 		delete(s.m, oldID)
 		s.dirty = true
 	}
+}
+
+// Follow redirects for media still buffered on another device after a rename.
+// Called with mu held.
+func (s *Store) redirectID(id string) string {
+	now := time.Now()
+	for range len(s.renamed) {
+		redirect, ok := s.renamed[id]
+		if !ok {
+			return id
+		}
+		if !now.Before(redirect.expires) {
+			delete(s.renamed, id)
+			return id
+		}
+		id = redirect.to
+		if id == "" {
+			return ""
+		}
+	}
+	return id
 }
 
 func (s *Store) Clear() {

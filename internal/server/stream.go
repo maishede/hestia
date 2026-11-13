@@ -2,17 +2,21 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/color"
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"hestia/internal/index"
 )
@@ -38,6 +42,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "媒体不存在")
 		return
 	}
+	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return
+	}
+	defer endRead()
 	f, err := os.Open(abs)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "文件无法读取（磁盘未挂载？）")
@@ -54,7 +63,24 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
-	http.ServeContent(w, r, m.Name+m.Ext, st.ModTime(), f)
+	serveMediaContent(ctx, w, r, m.Name+m.Ext, st.ModTime(), f)
+}
+
+// Close the file on cancellation, and unblock a response stalled on a client
+// before the deletion handler waits for this read to finish.
+func serveMediaContent(ctx context.Context, w http.ResponseWriter, r *http.Request, name string, mod time.Time, f *os.File) {
+	finished := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(finished)
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now())
+		_ = f.Close()
+	})
+	defer func() {
+		if !stop() {
+			<-finished
+		}
+	}()
+	http.ServeContent(w, r, name, mod, f)
 }
 
 // handleImage 输出图片；带 ?w= 参数时对 jpeg/png 生成盒采样缩略图（带磁盘缓存）。
@@ -82,7 +108,7 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 		wq = 1920
 	}
 
-	etag := fmt.Sprintf(`"%s-%d-%d-%d"`, id, wq, m.Size, m.Mtime.Unix())
+	etag := fmt.Sprintf(`"%s-%d-%d-%d"`, id, wq, m.Size, m.Mtime.UnixNano())
 	w.Header().Set("Etag", etag)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	if r.Header.Get("If-None-Match") == etag {
@@ -92,64 +118,164 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 
 	ext := strings.ToLower(m.Ext)
 	if wq > 0 && (ext == ".jpg" || ext == ".jpeg" || ext == ".jfif" || ext == ".png") {
-		if s.serveThumb(w, id, abs, wq, m) {
+		data, canceled := s.imageThumbnail(w, r, abs, wq, m)
+		if canceled {
+			return
+		}
+		if len(data) > 0 {
+			serveJPEG(w, data)
 			return
 		}
 	}
+	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return
+	}
+	defer endRead()
 	f, err := os.Open(abs)
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "文件无法读取")
 		return
 	}
 	defer f.Close()
-	st, _ := f.Stat()
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		errJSON(w, http.StatusNotFound, "文件不可用")
+		return
+	}
 	ct := streamMIME[ext]
 	if ct == "" {
 		ct = "image/jpeg"
 	}
 	w.Header().Set("Content-Type", ct)
-	if st != nil {
-		http.ServeContent(w, r, m.Name+m.Ext, st.ModTime(), f)
-		return
-	}
-	buf := &bytes.Buffer{}
-	_, _ = buf.ReadFrom(f)
-	w.Header().Set("Content-Type", ct)
-	_, _ = w.Write(buf.Bytes())
+	serveMediaContent(ctx, w, r, m.Name+m.Ext, st.ModTime(), f)
 }
 
-func (s *Server) serveThumb(w http.ResponseWriter, id, abs string, targetW int, m index.Media) bool {
+func (s *Server) imageThumbnail(w http.ResponseWriter, r *http.Request, abs string, targetW int, m index.Media) ([]byte, bool) {
 	cacheDir := filepath.Join(s.dataDir, "cache", "img")
-	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", id, targetW, m.Mtime.Unix()))
-	if b, err := os.ReadFile(cache); err == nil {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write(b)
-		return true
+	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d-%d.jpg", m.ID, targetW, m.Size, m.Mtime.UnixNano()))
+	// Preserve already generated previews from earlier builds.
+	legacy := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", m.ID, targetW, m.Mtime.Unix()))
+	for _, path := range []string{cache, legacy} {
+		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+			return b, false
+		}
 	}
-	f, err := os.Open(abs)
-	if err != nil {
-		return false
+	unlock, ok := s.imageJobs.lock(r.Context(), cache)
+	if !ok {
+		return nil, true
 	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return false
+	defer unlock()
+	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
+		return b, false
 	}
-	b := img.Bounds()
-	sw := b.Dx()
-	if sw <= targetW { // 原图更小，无需放大
-		return false
+	select {
+	case s.imageSlots <- struct{}{}:
+		defer func() { <-s.imageSlots }()
+	case <-r.Context().Done():
+		return nil, true
+	}
+	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
+	if !ok {
+		return nil, true
+	}
+	img := decodeThumbnailSource(abs, targetW)
+	// endRead releases the original file before writing the JPEG response.
+	canceled := ctx.Err() != nil
+	endRead()
+	if canceled {
+		mediaReadCanceled(ctx, w, r)
+		return nil, true
+	}
+	if img == nil {
+		return nil, false
 	}
 	dst := scaleBox(img, targetW)
 	buf := &bytes.Buffer{}
 	if err := jpeg.Encode(buf, dst, &jpeg.Options{Quality: 82}); err != nil {
-		return false
+		return nil, false
 	}
-	_ = os.MkdirAll(cacheDir, 0o755)
-	_ = os.WriteFile(cache, buf.Bytes(), 0o644)
-	w.Header().Set("Content-Type", "image/jpeg")
-	_, _ = w.Write(buf.Bytes())
-	return true
+	writeThumbnailCache(cache, buf.Bytes())
+	return buf.Bytes(), false
+}
+
+func decodeThumbnailSource(abs string, targetW int) image.Image {
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	config, _, err := image.DecodeConfig(f)
+	if err != nil || config.Width <= targetW {
+		return nil
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil
+	}
+	img, _, err := image.Decode(f)
+	if err != nil {
+		return nil
+	}
+	return img
+}
+
+func writeThumbnailCache(path string, data []byte) {
+	dir := filepath.Dir(path)
+	if os.MkdirAll(dir, 0o755) != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "thumbnail-*.tmp")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name())
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if writeErr == nil && closeErr == nil {
+		_ = os.Rename(tmp.Name(), path)
+	}
+}
+
+type imageJob struct {
+	busy  chan struct{}
+	users int
+}
+
+type imageJobs struct {
+	mu   sync.Mutex
+	jobs map[string]*imageJob
+}
+
+func (j *imageJobs) lock(ctx context.Context, key string) (func(), bool) {
+	j.mu.Lock()
+	if j.jobs == nil {
+		j.jobs = make(map[string]*imageJob)
+	}
+	job := j.jobs[key]
+	if job == nil {
+		job = &imageJob{busy: make(chan struct{}, 1)}
+		j.jobs[key] = job
+	}
+	job.users++
+	j.mu.Unlock()
+	unregister := func() {
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		job.users--
+		if job.users == 0 {
+			delete(j.jobs, key)
+		}
+	}
+	select {
+	case job.busy <- struct{}{}:
+		return func() {
+			<-job.busy
+			unregister()
+		}, true
+	case <-ctx.Done():
+		unregister()
+		return nil, false
+	}
 }
 
 // scaleBox 盒平均降采样（仅用于封面缩略图，质量足够、零依赖）。
@@ -159,6 +285,10 @@ func scaleBox(src image.Image, targetW int) *image.RGBA {
 	th := sh * targetW / sw
 	if th < 1 {
 		th = 1
+	}
+	if th > 1920 {
+		targetW = max(1, targetW*1920/th)
+		th = 1920
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, targetW, th))
 	for y := 0; y < th; y++ {
@@ -172,8 +302,11 @@ func scaleBox(src image.Image, targetW int) *image.RGBA {
 				sx1 = sx0 + 1
 			}
 			var rr, gg, bb, nn uint64
-			for sy := sy0; sy < sy1; sy++ {
-				for sx := sx0; sx < sx1; sx++ {
+			// Limit samples per output pixel so very large posters don't
+			// perform a separate color conversion for every source pixel.
+			stepX, stepY := (sx1-sx0+2)/3, (sy1-sy0+2)/3
+			for sy := sy0; sy < sy1; sy += stepY {
+				for sx := sx0; sx < sx1; sx += stepX {
 					pr, pg, pb, _ := src.At(b.Min.X+sx, b.Min.Y+sy).RGBA()
 					rr += uint64(pr)
 					gg += uint64(pg)
