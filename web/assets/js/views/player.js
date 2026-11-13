@@ -99,7 +99,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     videoInit: false, autoplay: false, playsinline: true,
     ignores: ['mobile', 'pc', 'keyboard', 'progress', 'time', 'start', 'loading', 'error', 'replay', 'miniprogress', ...(isIOS ? ['volume'] : [])],
     controls: { autoHide: false, initShow: true },
-    playbackRate: [2, 1.5, 1, 0.5],
+    playbackRate: { list: [2, 1.5, 1, 0.5], toggleMode: 'click' },
     fullscreen: { target: root, useScreenOrientation: true, lockOrientationType: 'landscape' },
     volume: Number.isFinite(savedVolume) ? clamp(savedVolume, 0, 1) : 1,
   })
@@ -743,7 +743,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       case 'ArrowUp': if (!isIOS) { vid.volume = clamp(vid.volume + 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'ArrowDown': if (!isIOS) { vid.volume = clamp(vid.volume - 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'f': toggleFS(); break
-      case 'Escape': ccMenu.hidden = true; break
+      case 'Escape': ccMenu.hidden = true; closeSpeedMenu(); break
     }
   }
   document.addEventListener('keydown', onKey)

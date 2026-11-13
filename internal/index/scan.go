@@ -37,6 +37,12 @@ type draftFolder struct {
 
 // RescanLibrary 全量扫描一个媒体库并原子替换其索引内容。
 func (s *Store) RescanLibrary(libID string) error {
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	return s.rescanLibrary(libID)
+}
+
+func (s *Store) rescanLibrary(libID string) error {
 	lib, ok := s.GetLibrary(libID)
 	if !ok {
 		return fmt.Errorf("库不存在")
@@ -44,9 +50,6 @@ func (s *Store) RescanLibrary(libID string) error {
 	if !lib.Enabled {
 		return nil
 	}
-	s.scanMu.Lock()
-	defer s.scanMu.Unlock()
-
 	s.mu.Lock()
 	if cur, ok := s.libs[libID]; ok {
 		cur.Scanning = true
@@ -132,14 +135,20 @@ func (s *Store) walkLibrary(libID, root string) error {
 
 	visited := 0
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if p == root {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() {
+				return fmt.Errorf("媒体库路径不是文件夹")
+			}
+			return nil
+		}
 		if err != nil {
 			return nil // 跳过不可读项，继续扫描其余内容
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if p == root {
-				return nil
-			}
 			if strings.HasPrefix(name, ".") || skipDirNames[strings.ToLower(name)] {
 				return fs.SkipDir
 			}
@@ -309,6 +318,7 @@ func (s *Store) walkLibrary(libID, root string) error {
 	// 拼音键
 	for _, m := range medias {
 		m.PyFull, m.PyInit = PinyinKeys(m.Name)
+		s.LookupProbeCache(root, m)
 	}
 	for _, df := range drafts {
 		df.f.PyFull, df.f.PyInit = PinyinKeys(df.f.Name)
@@ -316,6 +326,10 @@ func (s *Store) walkLibrary(libID, root string) error {
 
 	// ---- 原子提交 ----
 	s.mu.Lock()
+	if lib := s.libs[libID]; lib == nil || !lib.Enabled {
+		s.mu.Unlock()
+		return nil
+	}
 	s.dropLibraryLocked(libID)
 	for _, df := range drafts {
 		f := df.f
@@ -330,12 +344,6 @@ func (s *Store) walkLibrary(libID, root string) error {
 	s.rebuildLocked()
 	s.mu.Unlock()
 
-	// 探测缓存回填（时长/编码/字幕轨）
-	if root != "" {
-		for _, m := range medias {
-			s.LookupProbeCache(root, m)
-		}
-	}
 	s.setProgress(libID, len(medias))
 	return nil
 }

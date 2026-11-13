@@ -2,12 +2,14 @@
 package index
 
 import (
+	"cmp"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -144,7 +146,8 @@ type Store struct {
 	probeDirty bool
 	probeStop  chan struct{}
 	probeWG    sync.WaitGroup
-	scanMu     sync.Mutex // 串行化扫描
+	scanMu     sync.Mutex // 串行化扫描和删除
+	libraryMu  sync.Mutex // 文件变更期间保持媒体库配置稳定
 }
 
 func New(dataDir string) (*Store, error) {
@@ -187,24 +190,35 @@ func (s *Store) AddLibrary(path, label string) (string, error) {
 	if !fi.IsDir() {
 		return "", fmt.Errorf("不是文件夹: %s", path)
 	}
+	return s.RegisterLibrary(path, label, true), nil
+}
+
+// RegisterLibrary registers configured paths without waiting for disk access.
+// The background scan reports paths that cannot be read.
+func (s *Store) RegisterLibrary(path, label string, enabled bool) string {
 	id := s.LibID(path)
+	s.libraryMu.Lock()
+	defer s.libraryMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.libs[id]; ok {
-		return id, nil // 幂等
+		return id
 	}
 	if label == "" {
 		label = filepath.Base(path)
 	}
-	s.libs[id] = &LibraryState{ID: id, Path: path, Label: label, Enabled: true}
-	return id, nil
+	s.libs[id] = &LibraryState{ID: id, Path: path, Label: label, Enabled: enabled}
+	return id
 }
 
 func (s *Store) RemoveLibrary(id string) {
+	s.libraryMu.Lock()
+	defer s.libraryMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.libs, id)
 	s.dropLibraryLocked(id)
+	s.rebuildLocked()
 }
 
 func (s *Store) dropLibraryLocked(libID string) {
@@ -223,15 +237,18 @@ func (s *Store) dropLibraryLocked(libID string) {
 			delete(s.subs, sid)
 		}
 	}
-	s.rebuildLocked()
 }
 
 func (s *Store) SetLibraryEnabled(id string, en bool) {
+	s.libraryMu.Lock()
+	defer s.libraryMu.Unlock()
 	s.mu.Lock()
 	if lib, ok := s.libs[id]; ok {
 		lib.Enabled = en
 		if !en {
 			s.dropLibraryLocked(id)
+			lib.Files, lib.Dirs = 0, 0
+			s.rebuildLocked()
 		}
 	}
 	s.mu.Unlock()
@@ -312,18 +329,18 @@ func (s *Store) folderSummary(f *Folder) FolderSummary {
 	return sum
 }
 
-// Roots 返回所有母文件夹（各库第一层），空文件夹（整树无视频且无图片）不显示。
-func (s *Store) Roots(sortKey, order string) []FolderSummary {
+type FolderPage struct {
+	Folders []FolderSummary `json:"folders"`
+	Total   int             `json:"total"`
+	Page    int             `json:"page"`
+	Size    int             `json:"size"`
+}
+
+// Roots 返回各库第一层的非空文件夹，按页构造卡片。
+func (s *Store) Roots(page, size int, sortKey, order string) FolderPage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out = make([]FolderSummary, 0, 16)
-	for _, f := range s.folders {
-		if f.ParentID == "" && !f.treeEmpty() {
-			out = append(out, s.folderSummary(f))
-		}
-	}
-	sortFolderSummaries(out, sortKey, order)
-	return out
+	return s.folderPageLocked("", page, size, sortKey, order)
 }
 
 func (s *Store) GetFolder(id string) (Folder, bool) {
@@ -495,9 +512,12 @@ func mediaSummary(m *Media) MediaSummary {
 }
 
 type ChildrenResult struct {
-	Breadcrumb []Crumb         `json:"breadcrumb"`
-	Folders    []FolderSummary `json:"folders"`
-	Media      MediaPage       `json:"media"`
+	Breadcrumb   []Crumb         `json:"breadcrumb"`
+	Folders      []FolderSummary `json:"folders"`
+	FoldersPage  int             `json:"foldersPage"`
+	FoldersTotal int             `json:"foldersTotal"`
+	CanDelete    bool            `json:"canDelete"`
+	Media        MediaPage       `json:"media"`
 }
 
 type MediaPage struct {
@@ -507,53 +527,101 @@ type MediaPage struct {
 	Items []MediaSummary `json:"items"`
 }
 
-func (s *Store) Children(folderID string, page, size int, sortKey, order string) (ChildrenResult, error) {
+func (s *Store) Children(folderID string, folderPage, page, size int, sortKey, order string) (ChildrenResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if _, ok := s.folders[folderID]; !ok {
 		return ChildrenResult{}, fmt.Errorf("文件夹不存在")
 	}
-	res := ChildrenResult{Breadcrumb: s.breadcrumbLocked(folderID), Folders: []FolderSummary{}}
-	if ids, ok := s.childFolders[folderID]; ok {
-		for _, id := range ids {
-			if f := s.folders[id]; !f.treeEmpty() {
-				res.Folders = append(res.Folders, s.folderSummary(f))
-			}
-		}
-	}
-	sortFolderSummaries(res.Folders, sortKey, order)
-
+	folders := s.folderPageLocked(folderID, folderPage, size, sortKey, order)
 	mediaIDs := s.childMedia[folderID]
-	sums := make([]MediaSummary, 0, len(mediaIDs))
+	visible := make([]string, 0, len(mediaIDs))
 	for _, id := range mediaIDs {
 		m := s.media[id]
-		if m.Kind == KindImage && m.CoverOf != "" {
-			continue // 已并入视频卡片做海报的图片不再单独列出
+		if m.Kind != KindImage || m.CoverOf == "" {
+			visible = append(visible, id)
 		}
-		sums = append(sums, mediaSummary(m))
 	}
-	sortMediaSummaries(sums, sortKey, order)
-	res.Media = paginate(sums, page, size)
-	return res, nil
+	sortKey, order = normSort(sortKey, order)
+	if sortKey == "name" {
+		if order == "desc" {
+			slices.Reverse(visible)
+		}
+	} else {
+		slices.SortFunc(visible, func(a, b string) int {
+			left, right := s.media[a], s.media[b]
+			comparison := cmp.Compare(left.Size, right.Size)
+			if sortKey == "mtime" {
+				comparison = left.Mtime.Compare(right.Mtime)
+			}
+			return compareSort(comparison, order, left.Name, right.Name, a, b)
+		})
+	}
+	page, size = normalizePage(page, size)
+	start, end := pageBounds(len(visible), page, size)
+	items := make([]MediaSummary, 0, end-start)
+	for _, id := range visible[start:end] {
+		items = append(items, mediaSummary(s.media[id]))
+	}
+	return ChildrenResult{
+		Breadcrumb: s.breadcrumbLocked(folderID), Folders: folders.Folders, FoldersPage: folders.Page, FoldersTotal: folders.Total,
+		Media: MediaPage{Page: page, Size: size, Total: len(visible), Items: items},
+	}, nil
 }
 
-func paginate(sums []MediaSummary, page, size int) MediaPage {
+func (s *Store) folderPageLocked(parentID string, page, size int, sortKey, order string) FolderPage {
+	ids := s.childFolders[parentID]
+	sortKey, order = normSort(sortKey, order)
+	if sortKey == "mtime" {
+		ids = slices.Clone(ids)
+		slices.SortFunc(ids, func(a, b string) int {
+			left, right := s.folders[a], s.folders[b]
+			return compareSort(left.Mtime.Compare(right.Mtime), order, left.Name, right.Name, a, b)
+		})
+	} else if order == "desc" {
+		ids = slices.Clone(ids)
+		slices.Reverse(ids)
+	}
+	page, size = normalizePage(page, size)
+	start, end := pageBounds(len(ids), page, size)
+	items := make([]FolderSummary, 0, end-start)
+	for _, id := range ids[start:end] {
+		items = append(items, s.folderSummary(s.folders[id]))
+	}
+	return FolderPage{Folders: items, Total: len(ids), Page: page, Size: size}
+}
+
+// RecentCard reads cached metadata without probing media or calculating siblings.
+func (s *Store) RecentCard(id string) (MediaSummary, string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m := s.media[id]
+	if m == nil || m.Kind != KindVideo {
+		return MediaSummary{}, "", false
+	}
+	name := ""
+	if f := s.folders[m.FolderID]; f != nil {
+		name = f.Name
+	}
+	return mediaSummary(m), name, true
+}
+
+func normalizePage(page, size int) (int, int) {
 	if page < 1 {
 		page = 1
 	}
 	if size < 1 || size > 100 {
 		size = 20
 	}
-	total := len(sums)
+	return page, size
+}
+
+func pageBounds(total, page, size int) (int, int) {
+	if page-1 > total/size {
+		return total, total
+	}
 	start := (page - 1) * size
-	if start > total {
-		start = total
-	}
-	end := start + size
-	if end > total {
-		end = total
-	}
-	return MediaPage{Page: page, Size: size, Total: total, Items: sums[start:end]}
+	return start, start + min(size, total-start)
 }
 
 func (s *Store) breadcrumbLocked(folderID string) []Crumb {
@@ -623,67 +691,17 @@ func normSort(sortKey, order string) (string, string) {
 	return sortKey, order
 }
 
-func sortFolderSummaries(list []FolderSummary, sortKey, order string) {
-	sortKey, order = normSort(sortKey, order)
-	if sortKey == "size" {
-		sortKey = "name" // 文件夹无大小维度，降级为名称
+func compareSort(comparison int, order, nameA, nameB, idA, idB string) int {
+	if comparison != 0 {
+		if order == "desc" {
+			return -comparison
+		}
+		return comparison
 	}
-	desc := order == "desc"
-	if sortKey == "name" {
-		sort.SliceStable(list, func(i, j int) bool {
-			if desc {
-				return NaturalLess(list[j].Name, list[i].Name)
-			}
-			return NaturalLess(list[i].Name, list[j].Name)
-		})
-		return
+	if comparison := naturalCompare(nameA, nameB); comparison != 0 {
+		return comparison
 	}
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		if a.Mtime.Equal(b.Mtime) {
-			return NaturalLess(a.Name, b.Name)
-		}
-		if desc {
-			return a.Mtime.After(b.Mtime)
-		}
-		return a.Mtime.Before(b.Mtime)
-	})
-}
-
-func sortMediaSummaries(list []MediaSummary, sortKey, order string) {
-	sortKey, order = normSort(sortKey, order)
-	desc := order == "desc"
-	sort.SliceStable(list, func(i, j int) bool {
-		a, b := list[i], list[j]
-		var less bool
-		switch sortKey {
-		case "mtime":
-			if a.Mtime.Equal(b.Mtime) {
-				less = NaturalLess(a.Name, b.Name)
-			} else {
-				less = a.Mtime.Before(b.Mtime)
-			}
-			if desc && !a.Mtime.Equal(b.Mtime) {
-				less = a.Mtime.After(b.Mtime)
-			}
-		case "size":
-			if a.Size == b.Size {
-				less = NaturalLess(a.Name, b.Name)
-			} else {
-				less = a.Size < b.Size
-			}
-			if desc && a.Size != b.Size {
-				less = a.Size > b.Size
-			}
-		default:
-			if desc {
-				less = NaturalLess(b.Name, a.Name)
-			} else {
-				less = NaturalLess(a.Name, b.Name)
-			}
-		}
-		return less
-	})
+	return cmp.Compare(idA, idB)
 }
 
 // ---------- 探测缓存 ----------
@@ -783,7 +801,9 @@ func (s *Store) rebuildLocked() {
 	s.childFolders = map[string][]string{}
 	s.childMedia = map[string][]string{}
 	for id, f := range s.folders {
-		s.childFolders[f.ParentID] = append(s.childFolders[f.ParentID], id)
+		if !f.treeEmpty() {
+			s.childFolders[f.ParentID] = append(s.childFolders[f.ParentID], id)
+		}
 	}
 	for id, m := range s.media {
 		s.childMedia[m.FolderID] = append(s.childMedia[m.FolderID], id)
@@ -802,7 +822,7 @@ func (s *Store) foldersIDName(id string) string { return s.folders[id].Name }
 func (s *Store) mediaIDName(id string) string   { return s.media[id].Name }
 
 func sortIDsByName(ids []string, name nameGetter) {
-	sort.SliceStable(ids, func(i, j int) bool {
-		return NaturalLess(name(ids[i]), name(ids[j]))
+	slices.SortFunc(ids, func(a, b string) int {
+		return compareSort(0, "", name(a), name(b), a, b)
 	})
 }

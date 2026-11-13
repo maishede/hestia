@@ -131,12 +131,11 @@ func (a *app) apply(c config.Config) {
 	for id, w := range want {
 		_, exists := a.store.GetLibrary(id)
 		if !exists {
-			if _, err := a.store.AddLibrary(w.Path, w.Label); err != nil {
-				a.logger.Printf("添加媒体库失败 %s: %v", w.Path, err)
-				continue
+			a.store.RegisterLibrary(w.Path, w.Label, w.Enabled)
+			if w.Enabled {
+				a.logger.Printf("新增媒体库: %s（后台扫描中…）", w.Path)
+				go a.store.RescanLibrary(id)
 			}
-			a.logger.Printf("新增媒体库: %s（后台扫描中…）", w.Path)
-			go a.store.RescanLibrary(id)
 			a.appliedEnabled[id] = w.Enabled
 			continue
 		}

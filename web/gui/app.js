@@ -86,15 +86,11 @@ function render(s) {
 }
 
 async function refresh() {
-  try { render(await api('state')) } catch (e) { console.error(e) }
-}
-
-// 页面首次渲染完成：通知 Go 显示窗口（消除启动白屏）
-let readySignaled = false
-function signalReady() {
-  if (readySignaled) return
-  readySignaled = true
-  try { window.guiReady() } catch {}
+  const previous = state
+  try {
+    const next = await api('state')
+    if (state === previous) render(next)
+  } catch (e) { console.error(e) }
 }
 
 function act(fn) {
@@ -174,8 +170,12 @@ $('libList').addEventListener('change', e => {
 })
 $('pathInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnAdd').click() })
 
-refresh()
-setInterval(refresh, 1500)
-// 首个 state 到手即视为渲染完成
-const _firstRender = setInterval(() => { if (state) { clearInterval(_firstRender); signalReady() } }, 60)
-setTimeout(signalReady, 3000) // 兜底
+// The window can render its loading state while the backend is still starting.
+window.guiReady?.()
+
+async function pollState() {
+  if (!state || !document.hidden) await refresh()
+  const update = state?.update.status
+  setTimeout(pollState, !state || state.scanning || update === 'checking' || update === 'downloading' ? 1500 : 5000)
+}
+pollState()

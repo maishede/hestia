@@ -4,11 +4,12 @@ import { FolderView } from './views/folder.js'
 import { SearchView } from './views/search.js'
 import { PlayerView } from './views/player.js'
 import { ImageView } from './views/imageview.js'
+import { esc } from './util.js'
 
 const routes = [
   { re: /^#\/$/, view: HomeView, groups: 0 },
   { re: /^#\/folder\/([A-Za-z0-9_-]+)$/, view: FolderView, groups: 1 },
-  { re: /^#\/search\?(.+)$/, view: SearchView, groups: 1 },
+  { re: /^#\/search\?(.*)$/, view: SearchView, groups: 1 },
   { re: /^#\/play\/([A-Za-z0-9_-]+)$/, view: PlayerView, groups: 1 },
   { re: /^#\/image\/([A-Za-z0-9_-]+)$/, view: ImageView, groups: 1 },
 ]
@@ -43,7 +44,7 @@ async function route() {
       } catch (e) {
         if (generation !== routeGeneration) return
         console.error(e)
-        app.innerHTML = `<div class="empty-state"><p>加载失败：${e.message}</p><p class="hint">请刷新重试</p></div>`
+        app.innerHTML = `<div class="empty-state"><p>加载失败：${esc(e.message)}</p><p class="hint">请刷新重试</p></div>`
       }
       return
     }

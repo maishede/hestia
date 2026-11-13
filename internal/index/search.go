@@ -1,47 +1,52 @@
 package index
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // NaturalLess 数值感知自然排序（"铁2" < "铁10"），忽略大小写；中文按码点序。
 func NaturalLess(a, b string) bool {
-	ra, rb := []rune(a), []rune(b)
-	i, j := 0, 0
-	for i < len(ra) && j < len(rb) {
-		ca, cb := ra[i], rb[j]
-		if isDigitRune(ca) && isDigitRune(cb) {
-			ia, ja := i, j
-			for ia < len(ra) && isDigitRune(ra[ia]) {
-				ia++
-			}
-			for ja < len(rb) && isDigitRune(rb[ja]) {
-				ja++
-			}
-			na := strings.TrimLeft(string(ra[i:ia]), "0")
-			nb := strings.TrimLeft(string(rb[j:ja]), "0")
-			if len(na) != len(nb) {
-				return len(na) < len(nb)
-			}
-			if na != nb {
-				return na < nb
-			}
-			i, j = ia, ja
-			continue
-		}
-		la, lb := unicode.ToLower(ca), unicode.ToLower(cb)
-		if la != lb {
-			return la < lb
-		}
-		i++
-		j++
-	}
-	return len(ra)-i < len(rb)-j
+	return naturalCompare(a, b) < 0
 }
 
-func isDigitRune(r rune) bool { return r >= '0' && r <= '9' }
+func naturalCompare(a, b string) int {
+	for len(a) > 0 && len(b) > 0 {
+		if isDigit(a[0]) && isDigit(b[0]) {
+			ia, ib := digitCount(a), digitCount(b)
+			na := strings.TrimLeft(a[:ia], "0")
+			nb := strings.TrimLeft(b[:ib], "0")
+			if len(na) != len(nb) {
+				return cmp.Compare(len(na), len(nb))
+			}
+			if na != nb {
+				return cmp.Compare(na, nb)
+			}
+			a, b = a[ia:], b[ib:]
+			continue
+		}
+		ca, wa := utf8.DecodeRuneInString(a)
+		cb, wb := utf8.DecodeRuneInString(b)
+		if comparison := cmp.Compare(unicode.ToLower(ca), unicode.ToLower(cb)); comparison != 0 {
+			return comparison
+		}
+		a, b = a[wa:], b[wb:]
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+func digitCount(s string) int {
+	i := 0
+	for i < len(s) && isDigit(s[i]) {
+		i++
+	}
+	return i
+}
 
 type SearchItem struct {
 	ID       string  `json:"id"`
@@ -68,17 +73,11 @@ type scoredHit struct {
 // Search 全库模糊搜索：空格分词 AND；子串匹配优先，纯 ASCII 词支持子序列匹配；中文子串匹配。
 func (s *Store) Search(q string, page, size int, sortKey, order string) SearchResult {
 	tokens := tokenize(q)
-	res := SearchResult{Items: []SearchItem{}}
+	page, size = normalizePage(page, size)
+	res := SearchResult{Items: []SearchItem{}, Page: page, Size: size}
 	if len(tokens) == 0 {
 		return res
 	}
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 || size > 100 {
-		size = 20
-	}
-	res.Page, res.Size = page, size
 
 	var hits []scoredHit
 	s.mu.RLock()
@@ -87,7 +86,7 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 			continue
 		}
 		if ok, sc := matchItem(strings.ToLower(f.Name), f.PyFull, f.PyInit, tokens); ok {
-			hits = append(hits, scoredHit{SearchItem{ID: f.ID, Kind: "folder", Name: f.Name, Where: s.whereLocked(f.ID)}, sc})
+			hits = append(hits, scoredHit{SearchItem{ID: f.ID, Kind: "folder", Name: f.Name, Mtime: f.Mtime.Unix()}, sc})
 		}
 	}
 	for _, m := range s.media {
@@ -96,49 +95,29 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 		}
 		if ok, sc := matchItem(strings.ToLower(m.Name), m.PyFull, m.PyInit, tokens); ok {
 			it := SearchItem{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime.Unix(), Duration: m.Duration}
-			if f, ok := s.folders[m.FolderID]; ok {
-				it.Where = s.whereLocked(f.ID)
-			}
 			hits = append(hits, scoredHit{it, sc})
 		}
 	}
 	s.mu.RUnlock()
 
 	res.Total = len(hits)
-	if sortKey == "mtime" {
-		sort.SliceStable(hits, func(i, j int) bool {
-			a, b := hits[i], hits[j]
-			if a.item.Mtime == b.item.Mtime {
-				if order == "desc" {
-					return NaturalLess(b.item.Name, a.item.Name)
-				}
-				return NaturalLess(a.item.Name, b.item.Name)
-			}
-			if order == "desc" {
-				return a.item.Mtime > b.item.Mtime
-			}
-			return a.item.Mtime < b.item.Mtime
-		})
-	} else {
-		// 默认按相关度降序，平局自然名升序
-		sort.SliceStable(hits, func(i, j int) bool {
-			a, b := hits[i], hits[j]
-			if a.score != b.score {
-				return a.score > b.score
-			}
-			return NaturalLess(a.item.Name, b.item.Name)
-		})
-	}
+	slices.SortFunc(hits, func(a, b scoredHit) int {
+		comparison, direction := cmp.Compare(a.score, b.score), "desc"
+		if sortKey == "mtime" {
+			comparison, direction = cmp.Compare(a.item.Mtime, b.item.Mtime), order
+		}
+		return compareSort(comparison, direction, a.item.Name, b.item.Name, a.item.ID, b.item.ID)
+	})
 
-	start := (page - 1) * size
-	if start > len(hits) {
-		start = len(hits)
-	}
-	end := start + size
-	if end > len(hits) {
-		end = len(hits)
-	}
+	start, end := pageBounds(len(hits), page, size)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, h := range hits[start:end] {
+		if h.item.Kind == "folder" {
+			h.item.Where = s.whereLocked(h.item.ID)
+		} else if m := s.media[h.item.ID]; m != nil {
+			h.item.Where = s.whereLocked(m.FolderID)
+		}
 		res.Items = append(res.Items, h.item)
 	}
 	return res

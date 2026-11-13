@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -69,19 +70,23 @@ func runGUI(a *app) {
 		AutoFocus: true,
 		DataPath:  filepath.Join(a.dataDir, "webview"),
 	})
+	if w == nil {
+		a.logger.Print("GUI 初始化失败: 无法创建 WebView2 窗口")
+		a.shutdown()
+		return
+	}
 	defer w.Destroy()
 	w.SetTitle("Hestia 控制台")
 	w.SetSize(600, 760, webview2.HintNone)
 	setupWindowChrome(syscall.Handle(w.Window()))
-	// 防白屏：窗口先隐藏，页面渲染完成（guiReady）后再显示
+	// 等待页面骨架绘制，不等待状态请求或扫描。
 	hideMainWindow()
 	defer removeTray()
-	w.Bind("guiReady", func() { showGuiWindow() })
-	// 兜底：页面异常时 5 秒后强制显示，避免永远无窗
-	go func() {
-		time.Sleep(5 * time.Second)
-		w.Dispatch(func() { showGuiWindow() })
-	}()
+	var shown sync.Once
+	show := func() { shown.Do(showGuiWindow) }
+	w.Bind("guiReady", show)
+	fallback := time.AfterFunc(3*time.Second, func() { w.Dispatch(show) })
+	defer fallback.Stop()
 	w.Navigate("http://" + ln.Addr().String() + "/")
 	a.logger.Print("GUI 窗口已就绪")
 	w.Run()
@@ -266,7 +271,14 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 	})
 	mux.HandleFunc("/gui/api/open", func(w http.ResponseWriter, r *http.Request) {
 		if a.srv.Running() {
-			openBrowser(a.srv.URLs()[0])
+			host := strings.Trim(a.srv.ListenHost(), "[]")
+			switch host {
+			case "", "0.0.0.0":
+				host = "127.0.0.1"
+			case "::":
+				host = "::1"
+			}
+			openBrowser(fmt.Sprintf("http://%s", net.JoinHostPort(host, fmt.Sprint(a.srv.Port()))))
 		}
 		jwt(w, guiState(a))
 	})

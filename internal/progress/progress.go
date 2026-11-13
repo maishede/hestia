@@ -117,6 +117,31 @@ func (s *Store) Delete(mediaID string) {
 	s.mu.Unlock()
 }
 
+// UpdateMediaIDs removes progress for deleted media and transfers progress
+// for descendants whose IDs changed when their parent directory was renamed.
+func (s *Store) UpdateMediaIDs(removed []string, moved map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range removed {
+		if _, ok := s.m[id]; ok {
+			delete(s.m, id)
+			s.dirty = true
+		}
+	}
+	for oldID, newID := range moved {
+		entry, ok := s.m[oldID]
+		if !ok || oldID == newID {
+			continue
+		}
+		if existing := s.m[newID]; existing == nil || existing.UpdatedAt < entry.UpdatedAt {
+			entry.MediaID = newID
+			s.m[newID] = entry
+		}
+		delete(s.m, oldID)
+		s.dirty = true
+	}
+}
+
 func (s *Store) Clear() {
 	s.mu.Lock()
 	s.m = map[string]*Entry{}

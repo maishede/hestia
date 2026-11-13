@@ -46,6 +46,7 @@ export function mediaCard(m) {
 }
 
 function fmtDateLocal(unix) {
-  const d = new Date(unix * 1000)
+  const d = new Date(typeof unix === 'number' ? unix * 1000 : unix)
+  if (!Number.isFinite(d.getTime())) return ''
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

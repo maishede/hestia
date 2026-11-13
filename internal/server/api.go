@@ -52,17 +52,17 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"folders": s.store.Roots(qStr(r, "sort"), qStr(r, "order")),
-	})
+	res := s.store.Roots(qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
-	res, err := s.store.Children(r.PathValue("id"), qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
+	res, err := s.store.Children(r.PathValue("id"), qInt(r, "folderPage", 1), qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "文件夹不存在")
 		return
 	}
+	res.CanDelete = localLibraryAccess(r)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -311,7 +311,20 @@ func (s *Server) handleProgressGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProgressRecent(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": s.prog.Recent(qInt(r, "n", 12))})
+	type card struct {
+		progress.Entry
+		CardCover string `json:"cardCover"`
+	}
+	recent := s.prog.Recent(qInt(r, "n", 12))
+	items := make([]card, 0, len(recent))
+	for _, entry := range recent {
+		media, folder, ok := s.store.RecentCard(entry.MediaID)
+		if ok {
+			entry.Name, entry.Folder = media.Name, folder
+			items = append(items, card{entry, media.CardCover})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) handleProgressDelete(w http.ResponseWriter, r *http.Request) {
