@@ -62,6 +62,33 @@ test('a collection opens in a new tab and its video opens in that tab', async t 
   assert.equal(new URL(page.url()).hash, '#/?page=2')
 })
 
+test('choosing an actor keeps the sidebar scroll and supports browser history', async t => {
+  const { page } = await openLibrary(t, { width: 1120, height: 250 })
+  const sidebar = page.locator('.actor-list')
+  const actor = sidebar.getByRole('button', { name: /陈舟/ })
+  await actor.waitFor()
+  const scrollTop = await sidebar.evaluate(list => {
+    list.scrollTop = list.scrollHeight
+    return list.scrollTop
+  })
+  assert.ok(scrollTop > 0, 'the sidebar is scrolled before selecting an actor')
+
+  await actor.click()
+  const film = page.locator('#grid').getByRole('link', { name: /陈舟-电影/ })
+  await film.waitFor()
+  await actor.waitFor()
+  assert.equal(await sidebar.evaluate(list => list.scrollTop), scrollTop)
+  assert.equal(await actor.getAttribute('aria-pressed'), 'true')
+  assert.equal(await actor.evaluate(button => button === document.activeElement), true)
+
+  await page.goBack()
+  await page.locator('#grid').getByRole('link', { name: /Films/ }).waitFor()
+  assert.equal(await sidebar.evaluate(list => list.scrollTop), scrollTop)
+  await page.goForward()
+  await film.waitFor()
+  assert.equal(await sidebar.evaluate(list => list.scrollTop), scrollTop)
+})
+
 test('the mobile actor selector filters the library', async t => {
   const { page } = await openLibrary(t, { width: 390, height: 844 })
   const actors = page.getByRole('combobox', { name: '主演', exact: true })

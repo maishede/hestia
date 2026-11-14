@@ -136,7 +136,8 @@ func TestCollectionPages(t *testing.T) {
 func TestActorListAndVideoPages(t *testing.T) {
 	srv, root := libraryFixture(t, "林 青 & 吴 -第2集.MP4", "合集/子目录/林 青 & 吴-第10集-加长版.mkv",
 		"合集/林 青 & 吴二号-其他.mp4", "合集/只有文件名.mp4", "合集/-没有主演.mp4",
-		"合集/没有片名-.MP4", "合集/海报-剧照.jpg", "合集/字幕-轨道.srt")
+		"合集/没有片名-.MP4", "合集/海报-剧照.jpg", "合集/字幕-轨道.srt",
+		"合集/陈-第1集.mp4", "合集/陈-第3集.mp4", "合集/陈-第4集.mp4")
 	type actor struct {
 		Name  string
 		Count int
@@ -147,7 +148,7 @@ func TestActorListAndVideoPages(t *testing.T) {
 	readActors := func() []actor {
 		return decodeLibraryResponse[actorList](t, localLibraryRequest(srv, "GET", "/api/actors", "")).Actors
 	}
-	want := []actor{{"林 青 & 吴", 2}, {"林 青 & 吴二号", 1}}
+	want := []actor{{"陈", 3}, {"林 青 & 吴", 2}, {"林 青 & 吴二号", 1}}
 	if got := readActors(); !slices.Equal(got, want) {
 		t.Fatalf("actors = %+v, want %+v", got, want)
 	}
@@ -177,7 +178,7 @@ func TestActorListAndVideoPages(t *testing.T) {
 	if err := srv.store.RescanLibrary(libID); err != nil {
 		t.Fatal(err)
 	}
-	want = []actor{{"林 青 & 吴", 1}, {"林 青 & 吴二号", 1}, {"陈", 1}}
+	want = []actor{{"陈", 4}, {"林 青 & 吴", 1}, {"林 青 & 吴二号", 1}}
 	if got := readActors(); !slices.Equal(got, want) {
 		t.Fatalf("actors after rename and rescan = %+v, want %+v", got, want)
 	}

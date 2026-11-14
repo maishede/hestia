@@ -1,6 +1,7 @@
 package index
 
 import (
+	"cmp"
 	"slices"
 	"strings"
 )
@@ -26,7 +27,7 @@ func (s *Store) Actors() []ActorSummary {
 	}
 	s.mu.RUnlock()
 	slices.SortFunc(actors, func(a, b ActorSummary) int {
-		return compareSort(0, "", a.Name, b.Name, a.Name, b.Name)
+		return compareSort(cmp.Compare(a.Count, b.Count), "desc", a.Name, b.Name, a.Name, b.Name)
 	})
 	return actors
 }

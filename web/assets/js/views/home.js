@@ -15,10 +15,10 @@ function timeAgo(ms) {
 export function HomeView(app) {
   const sort = getSort()
   if (sort.key === 'size') sort.key = 'name'
-  const query = routeQuery()
-  const actor = query.get('actor') || ''
-  let page = pageNumber(query.get('page'))
+  let actor
+  let page
   let listRequest
+  let recentRequest
   const actorsRequest = new AbortController()
   let disposed = false
 
@@ -89,9 +89,13 @@ export function HomeView(app) {
   }
 
   async function loadRecent() {
+    if (disposed || actor) return
+    recentRequest?.abort()
+    const request = new AbortController()
+    recentRequest = request
     let data
-    try { data = await api('/api/progress/recent?n=12') } catch { return }
-    if (disposed) return
+    try { data = await api('/api/progress/recent?n=12', { signal: request.signal }) } catch { return }
+    if (request.signal.aborted) return
     if (!data.items.length) { recent.replaceChildren(); return }
     const cards = data.items.map(it => {
       const pct = it.duration > 0 ? Math.min(100, Math.round(it.position / it.duration * 100)) : 0
@@ -137,6 +141,8 @@ export function HomeView(app) {
     if (actor) query.set('actor', actor)
     const endpoint = actor ? '/api/actors/videos' : '/api/folders'
     root.querySelector('#libraryTitle').textContent = actor || '媒体库'
+    count.textContent = ''
+    pages.nav.hidden = true
     grid.innerHTML = skeleton(10, Boolean(actor))
     grid.classList.remove('list-empty')
     try {
@@ -144,9 +150,8 @@ export function HomeView(app) {
       if (request.signal.aborted) return
       const items = actor ? data.items : data.folders
       if (page > 1 && !items.length) {
-        page = Math.max(1, Math.ceil(data.total / data.size))
-        history.replaceState(null, '', homeHref(actor, page))
-        return load()
+        location.replace(homeHref(actor, Math.max(1, Math.ceil(data.total / data.size))))
+        return
       }
       count.textContent = actor ? `${data.total} 部视频` : `${data.total} 个合集`
       grid.classList.toggle('list-empty', !items.length)
@@ -162,26 +167,40 @@ export function HomeView(app) {
     }
   }
 
+  function updateRoute() {
+    const query = routeQuery()
+    const nextActor = query.get('actor') || ''
+    const nextPage = pageNumber(query.get('page'))
+    if (actor === nextActor && page === nextPage) return
+    actor = nextActor
+    page = nextPage
+    actorList.querySelector('[aria-pressed="true"]')?.setAttribute('aria-pressed', 'false')
+    actorList.querySelector(`[data-actor="${CSS.escape(actor)}"]`)?.setAttribute('aria-pressed', 'true')
+    actorPicker.value = actor
+    recentRequest?.abort()
+    recent.replaceChildren()
+    if (!actor) loadRecent()
+    load()
+  }
+
   root.querySelector('#sortSlot').appendChild(sortBarEl(sort, [
     { key: 'name', label: '名称' },
     { key: 'mtime', label: '修改日期' },
   ], v => {
     setSort(v)
     Object.assign(sort, v)
-    if (page > 1) {
-      page = 1
-      history.replaceState(null, '', homeHref(actor))
-    }
-    load()
+    if (page > 1) location.replace(homeHref(actor))
+    else load()
   }))
 
-  load()
+  updateRoute()
   loadActors()
-  if (!actor) loadRecent()
   return {
+    updateRoute,
     destroy() {
       disposed = true
       listRequest?.abort()
+      recentRequest?.abort()
       actorsRequest.abort()
     },
   }

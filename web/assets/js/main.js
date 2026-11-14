@@ -20,9 +20,13 @@ let routeGeneration = 0
 const app = document.getElementById('app')
 
 async function route() {
-  const generation = ++routeGeneration
   const path = (location.hash || '#/').split('?', 1)[0]
   document.querySelector('.brand').href = returnHomeHref()
+  if (path === '#/' && current?.updateRoute) {
+    current.updateRoute()
+    return
+  }
+  const generation = ++routeGeneration
   for (const r of routes) {
     const m = path.match(r.re)
     if (m) {
