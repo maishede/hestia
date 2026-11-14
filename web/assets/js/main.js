@@ -4,14 +4,15 @@ import { FolderView } from './views/folder.js'
 import { SearchView } from './views/search.js'
 import { PlayerView } from './views/player.js'
 import { ImageView } from './views/imageview.js'
+import { returnHomeHref, withHome } from './navigation.js'
 import { esc } from './util.js'
 
 const routes = [
-  { re: /^#\/$/, view: HomeView, groups: 0 },
-  { re: /^#\/folder\/([A-Za-z0-9_-]+)$/, view: FolderView, groups: 1 },
-  { re: /^#\/search\?(.*)$/, view: SearchView, groups: 1 },
-  { re: /^#\/play\/([A-Za-z0-9_-]+)$/, view: PlayerView, groups: 1 },
-  { re: /^#\/image\/([A-Za-z0-9_-]+)$/, view: ImageView, groups: 1 },
+  { re: /^#\/$/, view: HomeView },
+  { re: /^#\/folder\/([A-Za-z0-9_-]+)$/, view: FolderView },
+  { re: /^#\/search$/, view: SearchView },
+  { re: /^#\/play\/([A-Za-z0-9_-]+)$/, view: PlayerView },
+  { re: /^#\/image\/([A-Za-z0-9_-]+)$/, view: ImageView },
 ]
 
 let current = null
@@ -20,9 +21,10 @@ const app = document.getElementById('app')
 
 async function route() {
   const generation = ++routeGeneration
-  let hash = location.hash || '#/'
+  const path = (location.hash || '#/').split('?', 1)[0]
+  document.querySelector('.brand').href = returnHomeHref()
   for (const r of routes) {
-    const m = hash.match(r.re)
+    const m = path.match(r.re)
     if (m) {
       if (current && current.destroy) {
         try { current.destroy() } catch {}
@@ -60,6 +62,6 @@ const input = document.getElementById('searchInput')
 form.addEventListener('submit', e => {
   e.preventDefault()
   const q = input.value.trim()
-  if (q) location.hash = '#/search?q=' + encodeURIComponent(q)
+  if (q) location.hash = withHome('#/search?q=' + encodeURIComponent(q))
   else input.focus()
 })

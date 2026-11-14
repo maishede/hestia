@@ -65,6 +65,8 @@ func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, 
 	// 用户端 API
 	s.mux.HandleFunc("GET /api/server/info", s.handleServerInfo)
 	s.mux.HandleFunc("GET /api/folders", s.handleRoots)
+	s.mux.HandleFunc("GET /api/actors", s.handleActors)
+	s.mux.HandleFunc("GET /api/actors/videos", s.handleActorVideos)
 	s.mux.HandleFunc("GET /api/folders/{id}/children", s.handleChildren)
 	s.mux.HandleFunc("GET /api/folders/{id}/delete-preview", s.handleFolderDeletePreview)
 	s.mux.HandleFunc("POST /api/folders/{id}/delete", s.handleFolderDelete)

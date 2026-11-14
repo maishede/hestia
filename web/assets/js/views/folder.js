@@ -2,6 +2,7 @@
 import { api } from '../api.js'
 import { mountFolderDelete } from '../delete-dialog.js'
 import { folderCard, mediaCard } from '../cards.js'
+import { returnHomeHref, withHome } from '../navigation.js'
 import { pageSize, pager } from '../pagination.js'
 import { skeleton, emptyHTML, esc, sortBarEl, getSort, setSort } from '../util.js'
 
@@ -13,7 +14,10 @@ export function FolderView(app, id) {
   let request
 
   app.innerHTML = `<div class="page">
-    <div id="crumb" class="breadcrumb"></div>
+    <div class="breadcrumb">
+      <a class="btn ghost sm" href="${esc(returnHomeHref())}">返回主页</a>
+      <span id="crumb" class="breadcrumb-trail"></span>
+    </div>
     <div class="page-head">
       <h2 id="fname"></h2>
       <span class="count" id="count"></span>
@@ -62,18 +66,18 @@ export function FolderView(app, id) {
       $('#error').replaceChildren()
       $('#crumb').innerHTML = breadcrumb.map((crumb, index) => {
         const current = index === breadcrumb.length - 1
-        const href = crumb.id ? `#/folder/${esc(crumb.id)}` : '#/'
-        return `<a class="${current ? 'cur' : ''}" href="${href}">${esc(crumb.name)}</a>`
+        const href = crumb.id ? withHome(`#/folder/${crumb.id}`) : returnHomeHref()
+        return `<a class="${current ? 'cur' : ''}" href="${esc(href)}">${esc(crumb.name)}</a>`
       }).join('<span class="sep">/</span>')
       $('#fname').textContent = breadcrumb.at(-1)?.name || ''
       $('#count').textContent = `${data.foldersTotal} 个子文件夹 · ${media.total} 个媒体`
       deleteButton.hidden = !data.canDelete
       $('#foldersWrap').hidden = !data.foldersTotal
-      folders.innerHTML = data.folders.map(folderCard).join('')
+      folders.innerHTML = data.folders.map(folder => folderCard(folder)).join('')
       folderPager.update(data.foldersPage, data.foldersTotal, media.size)
       $('#mediaWrap').hidden = !media.total && data.foldersTotal > 0
       grid.classList.toggle('list-empty', !media.total)
-      grid.innerHTML = media.items.length ? media.items.map(mediaCard).join('')
+      grid.innerHTML = media.items.length ? media.items.map(item => mediaCard(item)).join('')
         : emptyHTML('这个文件夹是空的', '放入媒体后可在控制台重新扫描')
       mediaPager.update(media.page, media.total, media.size)
     } catch (error) {

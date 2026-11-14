@@ -1,4 +1,5 @@
 import { api, post } from './api.js'
+import { withHome } from './navigation.js'
 import { toast } from './util.js'
 
 // The confirmation always names the containing folder and the entire scope.
@@ -87,7 +88,7 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
       dialog.close()
       toast(result.warning || `已删除 ${result.files} 个媒体文件，文件夹已改名为「${result.name}」`,
         result.warning ? 'err' : 'info', result.warning ? 6500 : 3200)
-      location.hash = `#/folder/${result.id}`
+      location.hash = withHome(`#/folder/${result.id}`)
     } catch (error) {
       if (!disposed) showError(error.message)
     } finally {

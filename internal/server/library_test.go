@@ -8,12 +8,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"hestia/internal/index"
 	"hestia/internal/progress"
@@ -130,6 +133,79 @@ func TestCollectionPages(t *testing.T) {
 	}
 }
 
+func TestActorListAndVideoPages(t *testing.T) {
+	srv, root := libraryFixture(t, "林 青 & 吴 -第2集.MP4", "合集/子目录/林 青 & 吴-第10集-加长版.mkv",
+		"合集/林 青 & 吴二号-其他.mp4", "合集/只有文件名.mp4", "合集/-没有主演.mp4",
+		"合集/没有片名-.MP4", "合集/海报-剧照.jpg", "合集/字幕-轨道.srt")
+	type actor struct {
+		Name  string
+		Count int
+	}
+	type actorList struct {
+		Actors []actor
+	}
+	readActors := func() []actor {
+		return decodeLibraryResponse[actorList](t, localLibraryRequest(srv, "GET", "/api/actors", "")).Actors
+	}
+	want := []actor{{"林 青 & 吴", 2}, {"林 青 & 吴二号", 1}}
+	if got := readActors(); !slices.Equal(got, want) {
+		t.Fatalf("actors = %+v, want %+v", got, want)
+	}
+	path := "/api/actors/videos?actor=" + url.QueryEscape("林 青 & 吴")
+	second := decodeLibraryResponse[index.MediaPage](t, localLibraryRequest(srv, "GET", path+"&size=1&page=2&sort=name", ""))
+	if second.Page != 2 || second.Size != 1 || second.Total != 2 || len(second.Items) != 1 ||
+		second.Items[0].ID != index.NewID(root, "合集/子目录/林 青 & 吴-第10集-加长版.mkv") || second.Items[0].Kind != "video" {
+		t.Fatalf("second actor page = %+v", second)
+	}
+	firstDesc := decodeLibraryResponse[index.MediaPage](t, localLibraryRequest(srv, "GET", path+"&size=1&sort=name&order=desc", ""))
+	if firstDesc.Page != 1 || firstDesc.Total != 2 || len(firstDesc.Items) != 1 || firstDesc.Items[0].ID != second.Items[0].ID {
+		t.Fatalf("descending actor page = %+v", firstDesc)
+	}
+	empty := decodeLibraryResponse[index.MediaPage](t, localLibraryRequest(srv, "GET", path+"&size=1&page=3", ""))
+	if empty.Total != 2 || empty.Items == nil || len(empty.Items) != 0 {
+		t.Fatalf("out-of-range actor page = %+v", empty)
+	}
+	unknown := decodeLibraryResponse[index.MediaPage](t, localLibraryRequest(srv, "GET", "/api/actors/videos?actor="+url.QueryEscape("林 青"), ""))
+	if unknown.Total != 0 || unknown.Items == nil || len(unknown.Items) != 0 {
+		t.Fatalf("unknown actor page = %+v", unknown)
+	}
+	old := filepath.Join(root, "林 青 & 吴 -第2集.MP4")
+	if err := os.Rename(old, filepath.Join(root, "陈-第2集.MP4")); err != nil {
+		t.Fatal(err)
+	}
+	libID := srv.store.LibID(root)
+	if err := srv.store.RescanLibrary(libID); err != nil {
+		t.Fatal(err)
+	}
+	want = []actor{{"林 青 & 吴", 1}, {"林 青 & 吴二号", 1}, {"陈", 1}}
+	if got := readActors(); !slices.Equal(got, want) {
+		t.Fatalf("actors after rename and rescan = %+v, want %+v", got, want)
+	}
+	srv.store.SetLibraryEnabled(libID, false)
+	if got := readActors(); got == nil || len(got) != 0 {
+		t.Fatalf("actors after disabling library = %+v", got)
+	}
+}
+
+func TestSearchMatchesMediaNamesWithoutFolders(t *testing.T) {
+	srv, _ := libraryFixture(t, "王小明/片段.mp4", "合集/王小明-片段.mp4",
+		"合集/王小明-片段.jpg", "合集/王小明-剧照.png", "合集/王小明-字幕.srt")
+	for _, query := range []string{"王小明", "wangxiaoming"} {
+		t.Run(query, func(t *testing.T) {
+			path := "/api/search?q=" + url.QueryEscape(query) + "&size=1"
+			first := decodeLibraryResponse[index.SearchResult](t, localLibraryRequest(srv, "GET", path, ""))
+			second := decodeLibraryResponse[index.SearchResult](t, localLibraryRequest(srv, "GET", path+"&page=2", ""))
+			if first.Total != 2 || second.Total != 2 || len(first.Items) != 1 || len(second.Items) != 1 {
+				t.Fatalf("search pages = %+v and %+v", first, second)
+			}
+			got := map[string]string{first.Items[0].Name: first.Items[0].Kind, second.Items[0].Name: second.Items[0].Kind}
+			if got["王小明-片段"] != "video" || got["王小明-剧照"] != "image" {
+				t.Fatalf("search media names and kinds = %+v", got)
+			}
+		})
+	}
+}
+
 func TestRecentProgressIncludesCard(t *testing.T) {
 	srv, root := libraryFixture(t, "Series/ep.mp4", "Series/ep.jpg")
 	videoID := index.NewID(root, "Series/ep.mp4")
@@ -138,11 +214,13 @@ func TestRecentProgressIncludesCard(t *testing.T) {
 		Items []struct {
 			progress.Entry
 			CardCover string
+			Mtime     time.Time
 		}
 	}
 	res := decodeLibraryResponse[recentResponse](t, localLibraryRequest(srv, "GET", "/api/progress/recent", ""))
 	want := "/api/media/" + index.NewID(root, "Series/ep.jpg") + "/image?w=480"
-	if len(res.Items) != 1 || res.Items[0].Position != 32 || res.Items[0].CardCover != want || res.Items[0].Folder != "Series" {
+	if len(res.Items) != 1 || res.Items[0].Position != 32 || res.Items[0].CardCover != want ||
+		res.Items[0].Folder != "Series" || res.Items[0].Mtime.IsZero() {
 		t.Fatalf("recent = %+v, want cover %s", res, want)
 	}
 }

@@ -78,9 +78,35 @@ svg { display: block; }
 .page-head .count { color: var(--muted); font-size: 12.5px; }
 .page-head .spacer { flex: 1; }
 .section-title { font-size: 13px; font-weight: 600; color: var(--muted); margin: 26px 2px 12px; letter-spacing: .3px; }
+.library-layout { display: grid; min-width: 0; }
+.with-actors .library-layout { grid-template-columns: minmax(160px, 206px) minmax(0, 1fr); gap: 22px; }
+.library-content { min-width: 0; }
+.actor-sidebar {
+  position: sticky; top: calc(var(--topbar-h) + 22px); align-self: start;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
+  padding: 12px 8px 8px; min-width: 0;
+}
+.actor-sidebar h2 { margin: 0 8px 8px; font-size: 15px; }
+.actor-list { max-height: calc(100dvh - var(--topbar-h) - 100px); min-height: 80px; overflow: auto; }
+.actor-list button {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: 36px; padding: 6px 8px; border-radius: 7px; text-align: left;
+}
+.actor-list button span { overflow-wrap: anywhere; }
+.actor-list button small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.actor-list button:hover { background: var(--bg-soft); }
+.actor-list button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.actor-picker { display: none; }
+@media (max-width: 720px) {
+  .with-actors .library-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .actor-sidebar { display: none; }
+  .actor-picker { display: flex; align-items: center; gap: 10px; }
+  .actor-picker select { min-width: 0; max-width: min(320px, 80vw); }
+}
 
 /* ---------- 面包屑 ---------- */
 .breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 13.5px; margin: 4px 0 16px; color: var(--muted); }
+.breadcrumb-trail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .breadcrumb a { color: var(--muted); padding: 3px 6px; border-radius: 6px; }
 .breadcrumb a:hover { color: var(--text); background: var(--bg-soft); }
 .breadcrumb .cur { color: var(--text); font-weight: 600; padding: 3px 6px; }
@@ -170,6 +196,7 @@ svg { display: block; }
   overflow: hidden; word-break: break-all;
 }
 .card-meta { margin-top: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-updated { display: block; font-variant-numeric: tabular-nums; }
 
 /* ---------- 骨架屏 / 空状态 ---------- */
 .skeleton-card { border-radius: var(--radius); overflow: hidden; background: var(--card); border: 1px solid var(--line); }
@@ -199,8 +226,13 @@ body.player-mode .app { max-width: none; padding: 0; }
 }
 .player:fullscreen { width: 100%; height: 100%; max-height: none; border-radius: 0; }
 .player:-webkit-full-screen { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+body:has(.player.xgplayer-fullscreen-parent) { overflow: hidden; }
+.player.xgplayer-fullscreen-parent {
+  position: fixed; inset: 0; width: 100%; height: 100%; max-height: none; border-radius: 0;
+}
 .player video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 #xg-player { position: absolute; inset: 0; }
+.player.xgplayer-fullscreen-parent #xg-player { z-index: auto; }
 .player .xgplayer-controls { padding-bottom: env(safe-area-inset-bottom); box-sizing: content-box; }
 .player.controls-hidden .xgplayer-controls { opacity: 0; visibility: hidden; pointer-events: none; }
 .player .p-bottom { bottom: calc(48px + env(safe-area-inset-bottom)); z-index: 12; padding-top: 4px; padding-bottom: 4px; }
@@ -333,7 +365,7 @@ body.player-mode .app { max-width: none; padding: 0; }
   flex-direction: column; align-items: center; justify-content: center; gap: 14px;
   color: #dfe3ee; text-align: center; padding: 30px;
 }
-.player.loading .center-note.spinner-note { display: flex; }
+.player.loading .center-note.spinner-note { display: flex; pointer-events: none; }
 .player.error .center-note.error-note { display: flex; }
 .spinner { width: 42px; height: 42px; border-radius: 99px; border: 3px solid rgba(255, 255, 255, .18); border-top-color: #fff; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -1,12 +1,13 @@
-// 搜索页：后端分页的混合搜索结果
+// 搜索页：后端分页的媒体文件名搜索
 import { api } from '../api.js'
 import { mediaCard } from '../cards.js'
+import { routeQuery, withHome } from '../navigation.js'
 import { pageSize, pager } from '../pagination.js'
 import { skeleton, emptyHTML, sortBarEl, debounce } from '../util.js'
 
-export function SearchView(app, qs) {
+export function SearchView(app) {
   const input = document.getElementById('searchInput')
-  let q = new URLSearchParams(qs).get('q') || ''
+  let q = routeQuery().get('q') || ''
   input.value = q
   let sort = { key: 'relevance', order: 'desc' }
   let request
@@ -48,7 +49,7 @@ export function SearchView(app, qs) {
       if (page > 1 && !data.items.length) return load(Math.max(1, Math.ceil(data.total / data.size)))
       $('#count').textContent = `${data.total} 个结果`
       grid.classList.toggle('list-empty', !data.items.length)
-      grid.innerHTML = data.items.length ? data.items.map(mediaCard).join('')
+      grid.innerHTML = data.items.length ? data.items.map(item => mediaCard(item, { newTab: true })).join('')
         : emptyHTML('没有找到匹配的内容', '换个关键词试试', 'search')
       pages.update(data.page, data.total, data.size)
     } catch (error) {
@@ -65,7 +66,7 @@ export function SearchView(app, qs) {
   const onInput = debounce(value => {
     if (disposed) return
     q = value.trim()
-    history.replaceState(null, '', '#/search?q=' + encodeURIComponent(q))
+    history.replaceState(null, '', withHome('#/search?q=' + encodeURIComponent(q)))
     load()
   }, 350)
   const handler = e => onInput(e.target.value)

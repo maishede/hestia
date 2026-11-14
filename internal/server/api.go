@@ -56,6 +56,15 @@ func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+func (s *Server) handleActors(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string][]index.ActorSummary{"actors": s.store.Actors()})
+}
+
+func (s *Server) handleActorVideos(w http.ResponseWriter, r *http.Request) {
+	res := s.store.ActorVideos(qStr(r, "actor"), qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 	res, err := s.store.Children(r.PathValue("id"), qInt(r, "folderPage", 1), qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
 	if err != nil {
@@ -337,7 +346,8 @@ func (s *Server) handleProgressGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProgressRecent(w http.ResponseWriter, r *http.Request) {
 	type card struct {
 		progress.Entry
-		CardCover string `json:"cardCover"`
+		CardCover string    `json:"cardCover"`
+		Mtime     time.Time `json:"mtime"`
 	}
 	recent := s.prog.Recent(qInt(r, "n", 12))
 	items := make([]card, 0, len(recent))
@@ -345,7 +355,7 @@ func (s *Server) handleProgressRecent(w http.ResponseWriter, r *http.Request) {
 		media, folder, ok := s.store.RecentCard(entry.MediaID)
 		if ok {
 			entry.Name, entry.Folder = media.Name, folder
-			items = append(items, card{entry, media.CardCover})
+			items = append(items, card{Entry: entry, CardCover: media.CardCover, Mtime: media.Mtime})
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})

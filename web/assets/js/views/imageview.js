@@ -1,6 +1,7 @@
 // 图片详情：复用列表缩略图，需要时加载原图。
 import { api } from '../api.js'
 import { mountFolderDelete } from '../delete-dialog.js'
+import { returnHomeHref, withHome } from '../navigation.js'
 import { icon, esc } from '../util.js'
 
 export async function ImageView(app, id, isCurrent = () => true) {
@@ -9,9 +10,12 @@ export async function ImageView(app, id, isCurrent = () => true) {
   if (!isCurrent()) return null
   const root = document.createElement('section')
   root.className = 'media-detail'
+  const home = returnHomeHref()
+  const folder = meta.folderId ? withHome(`#/folder/${meta.folderId}`, home) : ''
   root.innerHTML = `
     <div class="detail-header">
-      <a class="btn ghost sm" id="iv-back" href="${meta.folderId ? `#/folder/${esc(meta.folderId)}` : '#/'}">${meta.folderId ? '返回文件夹' : '返回媒体库'}</a>
+      <a class="btn ghost sm" href="${esc(home)}">返回主页</a>
+      ${folder ? `<a class="btn ghost sm" href="${esc(folder)}">返回文件夹</a>` : ''}
       <div class="detail-title">
         <h1 id="iv-title">${esc(meta.name)}</h1>
         <p>${esc(meta.folderName || '')}</p>
@@ -56,7 +60,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
     nextButton.hidden = !meta.next
   }
   function navigate(dir) {
-    if (!stopped && meta[dir]) location.hash = `#/image/${meta[dir].id}`
+    if (!stopped && meta[dir]) location.hash = withHome(`#/image/${meta[dir].id}`, home)
   }
   prevButton.onclick = () => navigate('prev')
   nextButton.onclick = () => navigate('next')
@@ -65,7 +69,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
     if (stopped || e.target?.closest?.('input, textarea, select, dialog')) return
     if (e.key === 'ArrowLeft') navigate('prev')
     else if (e.key === 'ArrowRight') navigate('next')
-    else if (e.key === 'Escape') location.hash = $('#iv-back').hash
+    else if (e.key === 'Escape') location.hash = folder || home
   }
   document.addEventListener('keydown', onKey)
 

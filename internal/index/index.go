@@ -93,11 +93,9 @@ type Folder struct {
 	ImageCount int
 	SubVideos  int // 含子层视频总数
 	SubImages  int // 含子层图片总数
-	PyFull     string
-	PyInit     string
 }
 
-// treeEmpty 报告文件夹整棵子树是否既无视频也无图片（空文件夹不参与列表/搜索）。
+// treeEmpty 报告文件夹整棵子树是否既无视频也无图片。
 func (f *Folder) treeEmpty() bool { return f.SubVideos == 0 && f.SubImages == 0 }
 
 type LibraryState struct {
@@ -140,6 +138,7 @@ type Store struct {
 
 	childFolders map[string][]string // parentID -> folder ids（自然序）
 	childMedia   map[string][]string // folderID -> media ids（自然序）
+	actorVideos  map[string][]string // 主演 -> 视频 ID（自然序）
 
 	probeMu    sync.Mutex
 	probeCache map[string]*ProbeInfo
@@ -544,13 +543,17 @@ func (s *Store) Children(folderID string, folderPage, page, size int, sortKey, o
 			visible = append(visible, id)
 		}
 	}
+	return ChildrenResult{
+		Breadcrumb: s.breadcrumbLocked(folderID), Folders: folders.Folders, FoldersPage: folders.Page, FoldersTotal: folders.Total,
+		Media: s.mediaPageLocked(visible, page, size, sortKey, order),
+	}, nil
+}
+
+func (s *Store) mediaPageLocked(ids []string, page, size int, sortKey, order string) MediaPage {
 	sortKey, order = normSort(sortKey, order)
-	if sortKey == "name" {
-		if order == "desc" {
-			slices.Reverse(visible)
-		}
-	} else {
-		slices.SortFunc(visible, func(a, b string) int {
+	if sortKey != "name" {
+		ids = slices.Clone(ids)
+		slices.SortFunc(ids, func(a, b string) int {
 			left, right := s.media[a], s.media[b]
 			comparison := cmp.Compare(left.Size, right.Size)
 			if sortKey == "mtime" {
@@ -560,15 +563,19 @@ func (s *Store) Children(folderID string, folderPage, page, size int, sortKey, o
 		})
 	}
 	page, size = normalizePage(page, size)
-	start, end := pageBounds(len(visible), page, size)
+	start, end := pageBounds(len(ids), page, size)
+	reverse := sortKey == "name" && order == "desc"
+	if reverse {
+		start, end = len(ids)-end, len(ids)-start
+	}
 	items := make([]MediaSummary, 0, end-start)
-	for _, id := range visible[start:end] {
+	for _, id := range ids[start:end] {
 		items = append(items, mediaSummary(s.media[id]))
 	}
-	return ChildrenResult{
-		Breadcrumb: s.breadcrumbLocked(folderID), Folders: folders.Folders, FoldersPage: folders.Page, FoldersTotal: folders.Total,
-		Media: MediaPage{Page: page, Size: size, Total: len(visible), Items: items},
-	}, nil
+	if reverse {
+		slices.Reverse(items)
+	}
+	return MediaPage{Page: page, Size: size, Total: len(ids), Items: items}
 }
 
 func (s *Store) folderPageLocked(parentID string, page, size int, sortKey, order string) FolderPage {
@@ -802,6 +809,7 @@ func (s *Store) SetProbeResult(libPath string, m *Media, info *ProbeInfo) {
 func (s *Store) rebuildLocked() {
 	s.childFolders = map[string][]string{}
 	s.childMedia = map[string][]string{}
+	s.actorVideos = map[string][]string{}
 	for id, f := range s.folders {
 		if !f.treeEmpty() {
 			s.childFolders[f.ParentID] = append(s.childFolders[f.ParentID], id)
@@ -809,11 +817,19 @@ func (s *Store) rebuildLocked() {
 	}
 	for id, m := range s.media {
 		s.childMedia[m.FolderID] = append(s.childMedia[m.FolderID], id)
+		if m.Kind == KindVideo {
+			if actor := actorFromName(m.Name); actor != "" {
+				s.actorVideos[actor] = append(s.actorVideos[actor], id)
+			}
+		}
 	}
 	for _, ids := range s.childFolders {
 		sortIDsByName(ids, s.foldersIDName)
 	}
 	for _, ids := range s.childMedia {
+		sortIDsByName(ids, s.mediaIDName)
+	}
+	for _, ids := range s.actorVideos {
 		sortIDsByName(ids, s.mediaIDName)
 	}
 }

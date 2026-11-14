@@ -1,6 +1,7 @@
 // 播放器页：手势 + 倍速 + 断点续播 + 转码兜底
 import { api, post } from '../api.js'
 import { mountFolderDelete } from '../delete-dialog.js'
+import { returnHomeHref, withHome } from '../navigation.js'
 import { icon, fmtDur, fmtSize, toast, clamp, esc } from '../util.js'
 
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -93,10 +94,13 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     </div>`
   const detail = document.createElement('section')
   detail.className = 'media-detail'
+  const home = returnHomeHref()
+  const folder = meta.folderId ? withHome(`#/folder/${meta.folderId}`, home) : ''
   const properties = [fmtDur(meta.duration), fmtSize(meta.size)].filter(Boolean).join(' · ')
   detail.innerHTML = `
     <div class="detail-header">
-      <a class="btn ghost sm" href="${meta.folderId ? `#/folder/${esc(meta.folderId)}` : '#/'}">${meta.folderId ? '返回文件夹' : '返回媒体库'}</a>
+      <a class="btn ghost sm" href="${esc(home)}">返回主页</a>
+      ${folder ? `<a class="btn ghost sm" href="${esc(folder)}">返回文件夹</a>` : ''}
       <div class="detail-title">
         <h1>${esc(meta.name)}</h1>
         <p>${esc([meta.folderName, properties].filter(Boolean).join(' · '))}</p>
@@ -114,7 +118,9 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     ignores: ['mobile', 'pc', 'keyboard', 'progress', 'time', 'start', 'loading', 'error', 'replay', 'miniprogress', ...(isIOS ? ['volume'] : [])],
     controls: { autoHide: false, initShow: true },
     playbackRate: { list: [2, 1.5, 1, 0.5], toggleMode: 'click' },
-    fullscreen: { target: root, useScreenOrientation: true, lockOrientationType: 'landscape' },
+    // Both fullscreen modes need to include Hestia's gesture and progress overlays.
+    fullscreenTarget: root,
+    fullscreen: { useScreenOrientation: true, lockOrientationType: 'landscape' },
     volume: Number.isFinite(savedVolume) ? clamp(savedVolume, 0, 1) : 1,
   })
   // Hestia owns source switching so xgplayer never overwrites the HLS MediaSource.
@@ -532,10 +538,10 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   // ---------- 控件 ----------
   $('#btn-back').addEventListener('click', () => {
     if (history.length > 1) history.back()
-    else location.hash = '#/'
+    else location.hash = folder || home
   })
-  if (meta.prev) $('#btn-prev').addEventListener('click', () => { location.hash = `#/play/${meta.prev.id}` })
-  if (meta.next) $('#btn-next').addEventListener('click', () => { location.hash = `#/play/${meta.next.id}` })
+  if (meta.prev) $('#btn-prev').addEventListener('click', () => { location.hash = withHome(`#/play/${meta.prev.id}`, home) })
+  if (meta.next) $('#btn-next').addEventListener('click', () => { location.hash = withHome(`#/play/${meta.next.id}`, home) })
   function toggleFS() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     else {
@@ -718,7 +724,11 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     } else if (g.mode === 'vol') {
       hideHUD(700)
     } else if (!g.moved && !canceled) {
-      handleTap(e.clientX - root.getBoundingClientRect().left)
+      if (e.pointerType === 'mouse') {
+        togglePlay()
+        showControls()
+      }
+      else handleTap(e.clientX - root.getBoundingClientRect().left)
     }
   }
   gesture.addEventListener('pointerup', e => endPointer(e, false))
@@ -760,7 +770,11 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       case 'ArrowUp': if (!isIOS) { vid.volume = clamp(vid.volume + 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'ArrowDown': if (!isIOS) { vid.volume = clamp(vid.volume - 0.05, 0, 1); showHUD('vol', Math.round(vid.volume * 100) + '%', vid.volume * 100); hideHUD(700) } e.preventDefault(); break
       case 'f': toggleFS(); break
-      case 'Escape': ccMenu.hidden = true; closeSpeedMenu(); break
+      case 'Escape':
+        ccMenu.hidden = true
+        closeSpeedMenu()
+        if (player.isCssfullScreen) player.exitCssFullscreen()
+        break
     }
   }
   document.addEventListener('keydown', onKey)

@@ -171,7 +171,8 @@ func (s *Store) walkLibrary(libID, root string) error {
 			}
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(name))
+		suffix := filepath.Ext(name)
+		ext := strings.ToLower(suffix)
 		isVideo, isImage, isSub := videoExts[ext], imageExts[ext], subtitleExts[ext]
 		if !isVideo && !isImage && !isSub {
 			return nil
@@ -191,7 +192,7 @@ func (s *Store) walkLibrary(libID, root string) error {
 		if isSub {
 			subtitles = append(subtitles, &Subtitle{
 				ID: NewID(root, rel), LibraryID: libID, FolderID: folderIDFor(dirOfSlash(rel)),
-				RelPath: rel, Name: strings.TrimSuffix(name, ext), Ext: ext,
+				RelPath: rel, Name: strings.TrimSuffix(name, suffix), Ext: ext,
 				Size: info.Size(), Mtime: info.ModTime(),
 			})
 			return nil
@@ -202,7 +203,7 @@ func (s *Store) walkLibrary(libID, root string) error {
 		}
 		medias = append(medias, &Media{
 			ID: NewID(root, rel), LibraryID: libID, FolderID: folderIDFor(dirOfSlash(rel)),
-			RelPath: rel, Name: strings.TrimSuffix(name, ext), Ext: ext,
+			RelPath: rel, Name: strings.TrimSuffix(name, suffix), Ext: ext,
 			Kind: kind, Size: info.Size(), Mtime: info.ModTime(),
 		})
 		return nil
@@ -320,10 +321,6 @@ func (s *Store) walkLibrary(libID, root string) error {
 		m.PyFull, m.PyInit = PinyinKeys(m.Name)
 		s.LookupProbeCache(root, m)
 	}
-	for _, df := range drafts {
-		df.f.PyFull, df.f.PyInit = PinyinKeys(df.f.Name)
-	}
-
 	// ---- 原子提交 ----
 	s.mu.Lock()
 	if lib := s.libs[libID]; lib == nil || !lib.Enabled {

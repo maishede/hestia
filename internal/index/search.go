@@ -50,7 +50,7 @@ func digitCount(s string) int {
 
 type SearchItem struct {
 	ID       string  `json:"id"`
-	Kind     string  `json:"kind"` // video | image | folder
+	Kind     string  `json:"kind"` // video | image
 	Name     string  `json:"name"`
 	Where    string  `json:"where"` // 所属文件夹面包屑（仅名称，不含物理路径）
 	Size     int64   `json:"size,omitempty"`
@@ -70,7 +70,7 @@ type scoredHit struct {
 	score int
 }
 
-// Search 全库模糊搜索：空格分词 AND；子串匹配优先，纯 ASCII 词支持子序列匹配；中文子串匹配。
+// Search 按媒体文件名模糊搜索，支持空格分词、子串、拼音和 ASCII 子序列匹配。
 func (s *Store) Search(q string, page, size int, sortKey, order string) SearchResult {
 	tokens := tokenize(q)
 	page, size = normalizePage(page, size)
@@ -81,14 +81,6 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 
 	var hits []scoredHit
 	s.mu.RLock()
-	for _, f := range s.folders {
-		if f.treeEmpty() {
-			continue
-		}
-		if ok, sc := matchItem(strings.ToLower(f.Name), f.PyFull, f.PyInit, tokens); ok {
-			hits = append(hits, scoredHit{SearchItem{ID: f.ID, Kind: "folder", Name: f.Name, Mtime: f.Mtime.Unix()}, sc})
-		}
-	}
 	for _, m := range s.media {
 		if m.Kind == KindImage && m.CoverOf != "" {
 			continue // 已并入视频卡片做海报的图片不参与搜索
@@ -113,9 +105,7 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, h := range hits[start:end] {
-		if h.item.Kind == "folder" {
-			h.item.Where = s.whereLocked(h.item.ID)
-		} else if m := s.media[h.item.ID]; m != nil {
+		if m := s.media[h.item.ID]; m != nil {
 			h.item.Where = s.whereLocked(m.FolderID)
 		}
 		res.Items = append(res.Items, h.item)
