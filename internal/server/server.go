@@ -3,6 +3,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,13 +25,14 @@ import (
 const Version = "0.4.0"
 
 type Server struct {
-	cfg     *config.Manager
-	store   *index.Store
-	tc      Toolchain
-	tr      *Transcoder
-	prog    *progress.Store
-	dataDir string
-	logger  *log.Logger
+	deleteAccessCode string
+	cfg              *config.Manager
+	store            *index.Store
+	tc               Toolchain
+	tr               *Transcoder
+	prog             *progress.Store
+	dataDir          string
+	logger           *log.Logger
 
 	mux   *http.ServeMux
 	index []byte
@@ -49,8 +52,11 @@ type Server struct {
 }
 
 func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, prog *progress.Store, dataDir string, webFS fs.FS, logger *log.Logger) (*Server, error) {
+	var code [16]byte
+	rand.Read(code[:])
 	s := &Server{
-		cfg: cfg, store: store, tc: tc, tr: tr, prog: prog, dataDir: dataDir, logger: logger,
+		deleteAccessCode: hex.EncodeToString(code[:]),
+		cfg:              cfg, store: store, tc: tc, tr: tr, prog: prog, dataDir: dataDir, logger: logger,
 		mux: http.NewServeMux(), imageSlots: make(chan struct{}, 2), frameSlots: make(chan struct{}, 2),
 	}
 	assets, err := fs.Sub(webFS, "assets")
@@ -69,6 +75,7 @@ func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, 
 	s.mux.HandleFunc("GET /api/actors/videos", s.handleActorVideos)
 	s.mux.HandleFunc("GET /api/folders/{id}/children", s.handleChildren)
 	s.mux.HandleFunc("GET /api/folders/{id}/delete-preview", s.handleFolderDeletePreview)
+	s.mux.HandleFunc("GET /api/delete-access-code", s.handleDeleteAccessCode)
 	s.mux.HandleFunc("POST /api/folders/{id}/delete", s.handleFolderDelete)
 	s.mux.HandleFunc("GET /api/search", s.handleSearch)
 	s.mux.HandleFunc("GET /api/media/{id}", s.handleMediaDetail)

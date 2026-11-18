@@ -21,7 +21,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
         <p>${esc(meta.folderName || '')}</p>
       </div>
       <button type="button" class="btn ghost sm" id="iv-original">加载原图</button>
-      ${meta.canDelete ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
+      ${meta.canDelete || meta.deleteCodeRequired ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
     </div>
     <div class="image-view">
       <div class="iv-img-wrap"><img id="img" alt="${esc(meta.name)}"></div>
@@ -126,7 +126,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
     originalButton.disabled = true
   }
   const deleteButton = $('#detail-delete')
-  const disposeDelete = deleteButton && mountFolderDelete(root, deleteButton, meta.folderId, releaseImage)
+  const disposeDelete = deleteButton && mountFolderDelete(root, deleteButton, meta.folderId, releaseImage, meta.deleteCodeRequired)
   syncNavigation()
   showImage()
   return {

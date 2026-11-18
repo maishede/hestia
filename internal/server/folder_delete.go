@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,6 +14,20 @@ import (
 
 	"hestia/internal/index"
 )
+
+func (s *Server) handleDeleteAccessCode(w http.ResponseWriter, r *http.Request) {
+	if !localLibraryAccess(r) {
+		errJSON(w, http.StatusForbidden, "请在 Hestia 所在电脑上查看授权码")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]string{"code": s.deleteAccessCode})
+}
+
+func (s *Server) canManageMedia(r *http.Request) bool {
+	return localLibraryAccess(r) || s.deleteAccessCode != "" &&
+		subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Hestia-Delete-Code")), []byte(s.deleteAccessCode)) == 1
+}
 
 // A browser can only manage files from the app's local address on this machine.
 func localLibraryAccess(r *http.Request) bool {
@@ -36,8 +51,8 @@ func localLibraryAccess(r *http.Request) bool {
 }
 
 func (s *Server) handleFolderDeletePreview(w http.ResponseWriter, r *http.Request) {
-	if !localLibraryAccess(r) {
-		errJSON(w, http.StatusForbidden, "请在 Hestia 所在电脑上使用本机地址")
+	if !s.canManageMedia(r) {
+		errJSON(w, http.StatusForbidden, "请输入电脑端的删除授权码")
 		return
 	}
 	preview, err := s.store.PreviewFolderDeletion(r.PathValue("id"))
@@ -54,8 +69,8 @@ func (s *Server) handleFolderDelete(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if !localLibraryAccess(r) || r.Header.Get("Origin") != scheme+"://"+r.Host {
-		errJSON(w, http.StatusForbidden, "请在 Hestia 所在电脑上使用本机地址")
+	if !s.canManageMedia(r) || r.Header.Get("Origin") != scheme+"://"+r.Host {
+		errJSON(w, http.StatusForbidden, "删除授权无效，请重新打开删除窗口")
 		return
 	}
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

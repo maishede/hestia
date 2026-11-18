@@ -105,7 +105,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
         <h1>${esc(meta.name)}</h1>
         <p>${esc([meta.folderName, properties].filter(Boolean).join(' · '))}</p>
       </div>
-      ${meta.canDelete ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
+      ${meta.canDelete || meta.deleteCodeRequired ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
     </div>`
   detail.appendChild(root)
   app.replaceChildren(detail)
@@ -817,7 +817,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     root.classList.remove('loading')
     showError('播放已停止')
     $('#err-retry').textContent = '重新打开视频'
-  })
+  }, meta.deleteCodeRequired)
 
   // ---------- 启动 ----------
   if (meta.playback.mode === 'transcode') {

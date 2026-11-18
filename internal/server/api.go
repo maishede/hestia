@@ -145,7 +145,7 @@ func (s *Server) handleMediaDetail(w http.ResponseWriter, r *http.Request) {
 		"id": m.ID, "kind": m.Kind.String(), "name": m.Name, "size": m.Size,
 		"mtime": m.Mtime, "duration": m.Duration,
 		"vcodec": m.VCodec, "acodec": m.ACodec, "width": m.Width, "height": m.Height,
-		"folderId": m.FolderID, "canDelete": canDelete,
+		"folderId": m.FolderID, "canDelete": canDelete, "deleteCodeRequired": folderName != "" && !canDelete,
 		"folderName": folderName,
 		"stream":     "/api/media/" + m.ID + "/stream",
 		"playback": map[string]any{

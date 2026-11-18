@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -21,6 +22,45 @@ import (
 	"hestia/internal/index"
 	"hestia/internal/progress"
 )
+
+func TestLANDeleteAuthorization(t *testing.T) {
+	srv, root := libraryFixture(t, "Series/episode.mp4")
+	const host = "192.168.1.10:8080"
+	const origin = "http://" + host
+	folder := "/api/folders/" + index.NewID(root, "Series")
+	code := decodeLibraryResponse[struct{ Code string }](t,
+		localLibraryRequest(srv, "GET", "/api/delete-access-code", "")).Code
+	if len(code) != 32 {
+		t.Fatal("missing deletion access code")
+	}
+	request := func(method, path, body, accessCode, from string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, origin+path, strings.NewReader(body))
+		req.RemoteAddr = "192.168.1.11:12345"
+		req.Header.Set("X-Hestia-Delete-Code", accessCode)
+		req.Header.Set("Origin", from)
+		req.Header.Set("Content-Type", "application/json")
+		res := httptest.NewRecorder()
+		srv.mux.ServeHTTP(res, req)
+		return res
+	}
+	for _, path := range []string{"/api/delete-access-code", folder + "/delete-preview"} {
+		if res := request("GET", path, "", "", ""); res.Code != http.StatusForbidden {
+			t.Fatalf("%s status = %d", path, res.Code)
+		}
+	}
+	preview := decodeLibraryResponse[deletionPreviewResponse](t,
+		request("GET", folder+"/delete-preview", "", code, ""))
+	body := fmt.Sprintf(`{"reason":"看完","token":%q}`, preview.Token)
+	if res := request("POST", folder+"/delete", body, code, "http://other.example"); res.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin deletion status = %d", res.Code)
+	}
+	if res := request("POST", folder+"/delete", body, code, origin); res.Code != http.StatusOK {
+		t.Fatalf("authorized deletion status = %d: %s", res.Code, res.Body)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Series-看完", "episode.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("media still exists after deletion: %v", err)
+	}
+}
 
 func libraryFixture(t *testing.T, files ...string) (*Server, string) {
 	t.Helper()

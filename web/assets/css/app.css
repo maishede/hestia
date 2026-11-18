@@ -219,6 +219,15 @@ body.player-mode .app { max-width: none; padding: 0; }
 .detail-title { flex: 1 1 200px; min-width: 0; }
 .detail-title h1 { margin: 0; font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
 .detail-title p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+#delete-code-display { overflow-wrap: anywhere; user-select: all; }
+@media (max-width: 600px) {
+  .detail-header { gap: 8px; margin-bottom: 12px; }
+  .detail-title { flex-basis: 100%; order: -1; }
+  .detail-title h1 { font-size: 18px; }
+  .detail-title p { overflow-wrap: anywhere; }
+  .detail-header .btn, .delete-actions .btn { min-height: 44px; }
+  .delete-dialog .ipt { font-size: 16px; }
+}
 .player {
   position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 190px;
   max-height: 68dvh; overflow: hidden; border-radius: var(--radius); background: #000;
