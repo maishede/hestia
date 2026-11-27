@@ -44,6 +44,7 @@ type browser interface {
 	Eval(script string)
 	NotifyParentWindowPositionChanged() error
 	Focus()
+	Show() error
 }
 
 type webview struct {
@@ -64,6 +65,8 @@ type WindowOptions struct {
 	Height uint
 	IconId uint
 	Center bool
+	// StartHidden lets the caller show the host after its content is ready.
+	StartHidden bool
 }
 
 type WebViewOptions struct {
@@ -230,6 +233,11 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 			return r
 		case w32.WMSize:
 			w.browser.Resize()
+		case 0x0018: // WM_SHOWWINDOW
+			if wp != 0 {
+				w.browser.Resize()
+				_ = w.browser.Show()
+			}
 		case w32.WMActivate:
 			if wp == w32.WAInactive {
 				break
@@ -333,11 +341,16 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	)
 	setWindowContext(w.hwnd, w)
 
-	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
-	_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
-	_, _, _ = w32.User32SetFocus.Call(w.hwnd)
+	if !opts.StartHidden {
+		_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
+		_, _, _ = w32.User32UpdateWindow.Call(w.hwnd)
+		_, _, _ = w32.User32SetFocus.Call(w.hwnd)
+	}
 
 	if !w.browser.Embed(w.hwnd) {
+		// No WebView message loop is running yet. Don't post WM_QUIT on failure.
+		setWindowContext(w.hwnd, nil)
+		_, _, _ = w32.User32DestroyWindow.Call(w.hwnd)
 		return false
 	}
 	w.browser.Resize()

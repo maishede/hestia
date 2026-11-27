@@ -2,71 +2,123 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hestia 控制台</title>
-<link rel="icon" type="image/png" href="/img/logo.png?v=0.3.6">
+<link rel="icon" type="image/png" href="/img/logo.png">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <img class="logo" src="/img/logo.png?v=0.3.6" alt="">
-    <h1>Hestia <span>控制台</span></h1>
-  </header>
+<svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z"/><path d="M13 3v7h7M8 14h8m-8 3h5"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m10 3-.6 2.1-2 .9-2.1-.7-2 3.4 1.6 1.5v2.7l-1.6 1.6 2 3.4 2.1-.6 2 .9.6 2.8h4l.6-2.8 2-.9 2.1.6 2-3.4-1.6-1.6v-2.7l1.6-1.5-2-3.4-2.1.7-2-.9L14 3z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M20 9a8 8 0 0 0-13.6-3L3 9m0-5v5h5m-4 6a8 8 0 0 0 13.6 3l3.4-3m0 5v-5h-5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 5h6l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 5V4H4v12h1"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M13 4h7v7m0-7-9 9m7 0v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+</svg>
 
-  <section class="card status">
-    <div class="row1">
-      <span class="dot" id="dot"></span>
-      <span id="stateText">加载中…</span>
-      <button id="btnToggle" class="btn primary">启动服务</button>
+<header class="toolbar">
+  <div class="brand"><img src="/img/logo.png" alt="">Hestia</div>
+  <div class="toolbar-actions">
+    <button type="button" class="btn ghost" id="btnLog"><svg class="icon" aria-hidden="true"><use href="#i-log"/></svg>日志</button>
+    <button type="button" class="btn ghost" id="btnSettings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>设置</button>
+  </div>
+</header>
+
+<main class="workspace">
+  <section aria-labelledby="library-title">
+    <div class="workspace-head">
+      <h1 id="library-title">媒体库</h1>
+      <button type="button" class="btn primary" id="btnAddFolder"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>添加文件夹</button>
+      <p id="statText" class="summary" role="status">正在读取媒体库…</p>
+      <button type="button" class="btn ghost rescan" id="btnRescan" disabled><svg class="icon" aria-hidden="true"><use href="#i-scan"/></svg><span>重新扫描</span></button>
     </div>
-    <div class="url" id="localUrlText" hidden></div>
-    <div class="url" id="urlText">—</div>
-    <div class="actions">
-      <button id="btnOpen" class="btn" disabled>打开网页</button>
-      <button id="btnLog" class="btn">查看日志</button>
+    <table class="library-table" aria-label="媒体库文件夹" id="libTable" hidden>
+      <thead><tr><th scope="col">文件夹</th><th scope="col" class="contents">内容</th><th scope="col" class="status-col">状态</th><th scope="col" class="more-col" aria-label="操作"></th></tr></thead>
+      <tbody id="libList"></tbody>
+    </table>
+    <div id="emptyLibraries" class="library-empty" hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>
+      <p>还没有媒体库</p>
+      <span>添加一个文件夹，即可开始扫描媒体。</span>
     </div>
   </section>
+</main>
 
-  <section class="card">
-    <h2>媒体库</h2>
-    <div class="addrow">
-      <input id="pathInput" placeholder="输入文件夹路径，或点「浏览」选择" spellcheck="false">
-      <button id="btnBrowse" class="btn">浏览…</button>
-      <button id="btnAdd" class="btn primary">添加</button>
-    </div>
-    <div id="libList" class="liblist"></div>
-    <div class="foot">
-      <button id="btnRescan" class="btn">重新扫描</button>
-      <span id="statText" class="muted"></span>
-    </div>
-  </section>
+<footer class="service-bar" aria-label="服务状态">
+  <div class="service-controls">
+    <span class="service-state" role="status"><span class="dot" id="dot" aria-hidden="true"></span><span id="stateText">加载中…</span></span>
+    <button type="button" class="btn ghost service-toggle" id="btnToggle" disabled>启动服务</button>
+  </div>
+  <div class="service-access">
+    <button type="button" class="btn ghost access-label" id="btnAccess" title="查看本机和局域网地址" disabled>访问地址</button>
+    <span class="address-chip"><code id="urlText">—</code><button type="button" class="btn icon-only copy-address" id="btnCopy" aria-label="复制访问地址" title="复制访问地址" hidden><svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg></button></span>
+  </div>
+  <button type="button" class="btn outline open-browser" id="btnOpen" disabled><svg class="icon" aria-hidden="true"><use href="#i-open"/></svg>打开网页</button>
+</footer>
 
-  <section class="card">
-    <h2>设置</h2>
-    <div class="setrow">
-      <label>端口</label>
-      <input id="portInput" class="port">
-      <button id="btnPort" class="btn">应用</button>
-    </div>
-    <div class="setrow">
-      <label class="switch"><input type="checkbox" id="chkAuto"><i></i></label>
-      <span>开机自启（登录后自动运行）</span>
-    </div>
-    <div id="ffText" class="muted small"></div>
-  </section>
+<template id="libraryRow">
+  <tr class="libitem">
+    <td><div class="folder-cell">
+      <span class="folder-mark" aria-hidden="true"><svg class="icon"><use href="#i-folder"/></svg></span>
+      <div class="folder-text"><div class="libname"></div><div class="libpath"></div><div class="libstat"></div></div>
+    </div></td>
+    <td class="contents"><div class="media-count"></div><div class="folder-count"></div></td>
+    <td class="status-col"><label class="switch"><input type="checkbox" class="liben" role="switch"><span aria-hidden="true"></span></label></td>
+    <td class="more-col"><button type="button" class="btn ghost icon-only libmore" aria-controls="libraryActions" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button></td>
+  </tr>
+</template>
 
-  <section class="card">
-    <h2>软件更新</h2>
-    <div class="version-row">当前版本 <strong id="currentVersion">—</strong></div>
-    <div id="updateText" class="muted">点击「检查更新」查看是否有新版本</div>
-    <div class="actions">
-      <button id="btnCheckUpdate" class="btn">检查更新</button>
-      <button id="btnInstallUpdate" class="btn primary" hidden>下载并安装（将重启）</button>
-    </div>
-    <div id="updateProgress" class="update-progress" hidden><span id="updateProgressFill"></span></div>
-  </section>
+<div id="libraryActions" class="row-actions" popover>
+  <button type="button" class="btn danger" id="btnRemove">移除媒体库</button>
 </div>
+
+<dialog id="addDialog" aria-labelledby="add-title">
+  <header class="modal-head"><h2 id="add-title">添加文件夹</h2><button type="button" class="btn ghost icon-only" data-close aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+  <form id="addForm" class="modal-body">
+    <label for="pathInput">文件夹路径</label>
+    <div class="input-row"><input id="pathInput" placeholder="输入媒体文件夹的路径" spellcheck="false" required autofocus><button type="button" class="btn border" id="btnBrowse">浏览…</button></div>
+    <div class="modal-actions"><button type="button" class="btn ghost" data-close>取消</button><button type="submit" class="btn primary" id="btnAdd">添加</button></div>
+  </form>
+</dialog>
+
+<dialog id="removeDialog" aria-labelledby="remove-title" aria-describedby="removeDescription">
+  <header class="modal-head"><h2 id="remove-title">移除媒体库</h2><button type="button" class="btn ghost icon-only" data-close aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+  <div class="modal-body">
+    <p id="removeDescription"></p>
+    <div class="modal-actions"><button type="button" class="btn ghost" data-close autofocus>取消</button><button type="button" class="btn danger-solid" id="btnConfirmRemove">移除</button></div>
+  </div>
+</dialog>
+
+<dialog id="accessDialog" aria-labelledby="access-title">
+  <header class="modal-head"><h2 id="access-title">访问地址</h2><button type="button" class="btn ghost icon-only" data-close aria-label="关闭" autofocus><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+  <div class="modal-body"><div id="accessAddresses"></div><p id="portNote" class="muted" hidden></p></div>
+</dialog>
+
+<dialog id="settingsDialog" aria-labelledby="settings-title">
+  <header class="modal-head"><h2 id="settings-title">设置</h2><button type="button" class="btn ghost icon-only" data-close aria-label="关闭" autofocus><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+  <div class="modal-body settings">
+    <form class="setting-row" id="portForm">
+      <label for="portInput">服务端口</label>
+      <div class="input-row"><input id="portInput" class="port" type="number" min="1" max="65535" step="1" required><button type="submit" class="btn border" id="btnPort">应用</button></div>
+    </form>
+    <div class="setting-row">
+      <div><label for="chkAuto">开机自启</label><p class="muted" id="autoHint">登录 Windows 后自动运行</p></div>
+      <label class="switch"><input type="checkbox" id="chkAuto" role="switch" aria-label="开机自启" aria-describedby="autoHint"><span aria-hidden="true"></span></label>
+    </div>
+    <div class="setting-row setting-detail"><h3>FFmpeg</h3><p id="ffText" class="muted">—</p></div>
+    <div class="setting-row setting-detail">
+      <div class="setting-heading"><h3>软件更新</h3><span class="version" id="currentVersion">—</span></div>
+      <p id="updateText" class="muted" role="status">—</p>
+      <progress id="updateProgress" max="100" aria-label="下载进度" hidden></progress>
+      <div class="input-row"><button type="button" class="btn border" id="btnCheckUpdate">检查更新</button><button type="button" class="btn primary" id="btnInstallUpdate" hidden>下载并安装（将重启）</button></div>
+    </div>
+  </div>
+</dialog>
+
 <script src="/app.js"></script>
 </body>
 </html>

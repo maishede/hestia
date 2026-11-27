@@ -20,6 +20,7 @@ type Chromium struct {
 	controller            *ICoreWebView2Controller
 	webview               *ICoreWebView2
 	inited                uintptr
+	initFailed            bool
 	envCompleted          *iCoreWebView2CreateCoreWebView2EnvironmentCompletedHandler
 	controllerCompleted   *iCoreWebView2CreateCoreWebView2ControllerCompletedHandler
 	webMessageReceived    *iCoreWebView2WebMessageReceivedEventHandler
@@ -92,22 +93,33 @@ func (e *Chromium) Embed(hwnd uintptr) bool {
 		log.Printf("Result: %08x", res)
 		return false
 	}
+	const initTimerID, wmTimer = 1, 0x0113
+	timer, _, err := w32.User32SetTimer.Call(hwnd, initTimerID, 20000, 0)
+	if timer == 0 {
+		log.Printf("WebView2 initialization timer failed: %v", err)
+		return false
+	}
+	defer w32.User32KillTimer.Call(hwnd, initTimerID)
 	var msg w32.Msg
-	for {
-		if atomic.LoadUintptr(&e.inited) != 0 {
-			break
-		}
+	for !e.initFailed && atomic.LoadUintptr(&e.inited) == 0 {
 		r, _, _ := w32.User32GetMessageW.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0,
 			0,
 			0,
 		)
-		if r == 0 {
-			break
+		if int32(r) <= 0 {
+			return false
+		}
+		if msg.Message == wmTimer && uintptr(msg.Hwnd) == hwnd && msg.WParam == initTimerID {
+			log.Print("WebView2 initialization timed out")
+			return false
 		}
 		_, _, _ = w32.User32TranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		_, _, _ = w32.User32DispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+	}
+	if e.initFailed {
+		return false
 	}
 	e.Init("window.external={invoke:s=>window.chrome.webview.postMessage(s)}")
 	return true
@@ -149,6 +161,9 @@ func (e *Chromium) Eval(script string) {
 }
 
 func (e *Chromium) Show() error {
+	if e.controller == nil {
+		return nil
+	}
 	return e.controller.PutIsVisible(true)
 }
 
@@ -169,23 +184,31 @@ func (e *Chromium) Release() uintptr {
 }
 
 func (e *Chromium) EnvironmentCompleted(res uintptr, env *ICoreWebView2Environment) uintptr {
-	if int64(res) < 0 {
-		log.Fatalf("Creating environment failed with %08x", res)
+	if int32(res) < 0 || env == nil {
+		log.Printf("Creating WebView2 environment failed with %08x", uint32(res))
+		e.initFailed = true
+		return 0
 	}
 	_, _, _ = env.vtbl.AddRef.Call(uintptr(unsafe.Pointer(env)))
 	e.environment = env
 
-	_, _, _ = env.vtbl.CreateCoreWebView2Controller.Call(
+	res, _, _ = env.vtbl.CreateCoreWebView2Controller.Call(
 		uintptr(unsafe.Pointer(env)),
 		e.hwnd,
 		uintptr(unsafe.Pointer(e.controllerCompleted)),
 	)
+	if int32(res) < 0 {
+		log.Printf("Requesting WebView2 controller failed with %08x", uint32(res))
+		e.initFailed = true
+	}
 	return 0
 }
 
 func (e *Chromium) CreateCoreWebView2ControllerCompleted(res uintptr, controller *ICoreWebView2Controller) uintptr {
-	if int64(res) < 0 {
-		log.Fatalf("Creating controller failed with %08x", res)
+	if int32(res) < 0 || controller == nil {
+		log.Printf("Creating WebView2 controller failed with %08x", uint32(res))
+		e.initFailed = true
+		return 0
 	}
 	_, _, _ = controller.vtbl.AddRef.Call(uintptr(unsafe.Pointer(controller)))
 	e.controller = controller

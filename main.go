@@ -54,6 +54,8 @@ func main() {
 	if singleInstanceTaken() {
 		return // 已有实例（可能在托盘），立即退出不闪窗
 	}
+	finishStartup := showStartup()
+	defer finishStartup()
 	home := os.Getenv("HESTIA_HOME")
 	if home == "" {
 		if exe, err := os.Executable(); err == nil {
@@ -95,7 +97,7 @@ func main() {
 	}
 	a.apply(cfgM.Get())
 	cfgM.OnChange(a.apply)
-	runApp(a)
+	runApp(a, finishStartup)
 }
 
 func fatal(l *log.Logger, format string, v ...any) {

@@ -21,7 +21,9 @@ func runUpdateHelperIfRequested() bool { return false }
 
 func singleInstanceTaken() bool { return false }
 
-func runApp(a *app) {
+func showStartup() func() { return func() {} }
+
+func runApp(a *app, _ func()) {
 	if err := a.srv.ListenAndServe(); err != nil {
 		fatal(a.logger, "%v", err)
 	}

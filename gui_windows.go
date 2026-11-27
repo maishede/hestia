@@ -10,13 +10,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -25,16 +25,24 @@ import (
 	"hestia/internal/config"
 )
 
-func runApp(a *app) {
+func runApp(a *app, finishStartup func()) {
 	if err := a.srv.StartListener(); err != nil {
 		a.logger.Printf("服务自启失败（可在窗口中手动启动）: %v", err)
 	}
-	runGUI(a)
+	runGUI(a, finishStartup)
 }
 
 // runGUI 在主线程运行 WebView2 窗口（阻塞直至窗口关闭）。
-func runGUI(a *app) {
+func runGUI(a *app, finishStartup func()) {
 	runtime.LockOSThread()
+	previousLog := log.Writer()
+	log.SetOutput(a.logger.Writer()) // Capture WebView2 runtime errors in the application log.
+	defer log.SetOutput(previousLog)
+	startupError := func(detail string) {
+		a.logger.Print("GUI 初始化失败: " + detail)
+		finishStartup()
+		pTMessageBoxW.Call(0, t16(detail+"\n请查看 data\\logs\\hestia.log 后重试。"), t16("Hestia 启动失败"), 0x10) // MB_ICONERROR
+	}
 	if exe, err := os.Executable(); err == nil {
 		if message, err := os.ReadFile(filepath.Join(updateDir(exe), "last-error.txt")); err == nil {
 			guiUpdater.fail(fmt.Errorf("上次更新失败：%s", strings.TrimSpace(string(message))))
@@ -44,7 +52,7 @@ func runGUI(a *app) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		a.logger.Printf("GUI 初始化失败: %v", err)
+		startupError("无法启动本机控制台服务：" + err.Error())
 		a.shutdown()
 		return
 	}
@@ -65,30 +73,64 @@ func runGUI(a *app) {
 	}()
 
 	// WebView2 的用户数据也固定在 exe 同目录，不在系统盘留任何文件
+	webviewStarted := time.Now()
 	w = webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
 		DataPath:  filepath.Join(a.dataDir, "webview"),
+		WindowOptions: webview2.WindowOptions{
+			StartHidden: true,
+		},
 	})
 	if w == nil {
-		a.logger.Print("GUI 初始化失败: 无法创建 WebView2 窗口")
+		startupError("无法初始化 WebView2。请检查 Microsoft Edge WebView2 Runtime 是否正常安装。")
 		a.shutdown()
 		return
 	}
+	a.logger.Printf("WebView2 初始化耗时 %d 毫秒", time.Since(webviewStarted).Milliseconds())
 	defer w.Destroy()
-	w.SetTitle("Hestia 控制台")
-	w.SetSize(600, 760, webview2.HintNone)
-	setupWindowChrome(syscall.Handle(w.Window()))
-	// 等待页面骨架绘制，不等待状态请求或扫描。
-	hideMainWindow()
+	w.SetSize(620, 590, webview2.HintNone)
 	defer removeTray()
-	var shown sync.Once
-	show := func() { shown.Do(showGuiWindow) }
-	w.Bind("guiReady", show)
-	fallback := time.AfterFunc(3*time.Second, func() { w.Dispatch(show) })
-	defer fallback.Stop()
+	pageStarted := time.Now()
+	var mounted, ready, failed bool // All changes run on the WebView2 UI thread.
+	w.Bind("guiReady", func() {
+		w.Dispatch(func() {
+			if mounted || failed {
+				return
+			}
+			mounted = true
+			// 就绪后才注册托盘和窗口标题，避免提前唤醒隐藏窗口。
+			setupWindowChrome(syscall.Handle(w.Window()))
+			w.SetTitle("Hestia 控制台")
+			showGuiWindow()
+			// A hidden WebView may throttle animation frames. Start checking after showing it.
+			w.Eval("requestAnimationFrame(() => requestAnimationFrame(() => window.guiPainted()))")
+		})
+	})
+	w.Bind("guiPainted", func() {
+		if mounted && !ready && !failed {
+			ready = true
+			finishStartup()
+			a.logger.Printf("GUI 窗口已就绪，页面加载耗时 %d 毫秒", time.Since(pageStarted).Milliseconds())
+		}
+	})
+	timeout := time.AfterFunc(10*time.Second, func() {
+		w.Dispatch(func() {
+			if ready {
+				return
+			}
+			failed = true
+			detail := "控制台页面加载超时。"
+			if mounted {
+				pTShowWindow.Call(uintptr(w.Window()), swHide)
+				detail = "控制台页面已加载，但 WebView2 未完成绘制。"
+			}
+			startupError(detail)
+			w.Terminate()
+		})
+	})
+	defer timeout.Stop()
 	w.Navigate("http://" + ln.Addr().String() + "/")
-	a.logger.Print("GUI 窗口已就绪")
 	w.Run()
 	a.shutdown()
 }
