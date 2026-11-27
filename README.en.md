@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English | [日本語](README.ja.md)
 
-Browse and play media from multiple drives and folders in your phone's browser.
+Hestia is a self-hosted home media server for Windows, macOS, and Linux. It organizes local videos and photos from multiple drives and folders into a library you can search and browse on phones and computers over your local network. Stream videos in the browser with SRT and ASS subtitles, resume playback, and use FFmpeg to transcode on demand.
 
 - **Single executable** (about 11 MB on Windows). Hestia needs no installation. Its Windows interface uses the WebView2 Runtime.
 - **For your local network.** Browsing and playback require no login. The site hides filesystem paths. Media deletion requires local access or an authorization code.
