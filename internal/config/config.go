@@ -21,6 +21,7 @@ type Config struct {
 	Listen      string    `json:"listen"`
 	OpenBrowser bool      `json:"openBrowser"`
 	AutoStart   bool      `json:"autoStart"`
+	Language    string    `json:"language,omitempty"`
 	Libraries   []Library `json:"libraries"`
 }
 
@@ -97,9 +98,12 @@ func (m *Manager) Get() Config {
 // Update 以回调方式修改并持久化配置，然后触发 onChange。
 func (m *Manager) Update(mutate func(*Config)) error {
 	m.mu.Lock()
+	old := m.snapshotLocked()
 	m.cfg = applyDefaults(m.cfg)
 	mutate(&m.cfg)
 	if err := m.persistLocked(); err != nil {
+		m.cfg = old
+		m.mu.Unlock()
 		return err
 	}
 	cfg := m.snapshotLocked()

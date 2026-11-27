@@ -1,3 +1,6 @@
+import { t } from './i18n.js'
+import { esc } from './util.js'
+
 export const pageSize = 20
 
 export function pager(onPage, label) {
@@ -5,9 +8,9 @@ export function pager(onPage, label) {
   nav.className = 'pagination'
   nav.setAttribute('aria-label', label)
   nav.hidden = true
-  nav.innerHTML = `<button type="button" class="btn ghost sm">上一页</button>
+  nav.innerHTML = `<button type="button" class="btn ghost sm">${esc(t('previousPage'))}</button>
     <span aria-live="polite"></span>
-    <button type="button" class="btn ghost sm">下一页</button>`
+    <button type="button" class="btn ghost sm">${esc(t('nextPage'))}</button>`
   const [prev, info, next] = nav.children
   let current = 1
   prev.onclick = () => onPage(current - 1)
@@ -18,7 +21,7 @@ export function pager(onPage, label) {
       current = page
       const pages = Math.max(1, Math.ceil(total / size))
       nav.hidden = pages <= 1
-      info.textContent = `第 ${page} / ${pages} 页`
+      info.textContent = t('pageIndicator', { page, pages })
       prev.disabled = page <= 1
       next.disabled = page >= pages
     },

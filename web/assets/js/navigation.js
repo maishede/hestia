@@ -28,3 +28,9 @@ export function withHome(href, home = returnHomeHref()) {
   query.set('home', home)
   return `${href.split('?', 1)[0]}?${query}`
 }
+
+export function searchHref(query, actor = '', home = returnHomeHref()) {
+  const params = new URLSearchParams({ q: query })
+  if (actor) params.set('actor', actor)
+  return withHome(`#/search?${params}`, home)
+}

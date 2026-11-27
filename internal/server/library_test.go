@@ -285,6 +285,70 @@ func TestSearchMatchesMediaNamesWithoutFolders(t *testing.T) {
 	}
 }
 
+func TestSearchCountsActorsAcrossPagesAndFiltersResults(t *testing.T) {
+	srv, _ := libraryFixture(t, "Films/Zoe - 25 One.mp4", "Films/Zoe - 25 Two.mp4",
+		"Films/Zoe - Other.mp4", "Films/Anna - 25 One.mp4", "Films/Beth - 25 One.mp4",
+		"Films/Picture Actor - 25 Still.png", "Films/25 solo.mp4")
+	type searchResponse struct {
+		index.SearchResult
+		Actors []index.ActorSummary `json:"actors"`
+	}
+	search := func(params string) searchResponse {
+		return decodeLibraryResponse[searchResponse](t, localLibraryRequest(srv, "GET", "/api/search?"+params, ""))
+	}
+	allActors := []index.ActorSummary{{Name: "Zoe", Count: 2}, {Name: "Anna", Count: 1}, {Name: "Beth", Count: 1}}
+	first := search("q=25&size=1")
+	if first.Total != 6 || len(first.Items) != 1 || !slices.Equal(first.Actors, allActors) {
+		t.Fatalf("unfiltered search = %+v, want 6 matches and actors %+v", first, allActors)
+	}
+	for page, want := range []string{"Zoe - 25 One", "Zoe - 25 Two"} {
+		filtered := search("q=25&actor=Zoe&size=1&page=" + strconv.Itoa(page+1))
+		if filtered.Total != 2 || filtered.Page != page+1 || len(filtered.Items) != 1 ||
+			filtered.Items[0].Name != want || !slices.Equal(filtered.Actors, allActors) {
+			t.Fatalf("filtered page %d = %+v, want %q and actors %+v", page+1, filtered, want, allActors)
+		}
+	}
+	unknown := search("q=25&actor=Zo")
+	if unknown.Total != 0 || len(unknown.Items) != 0 || !slices.Equal(unknown.Actors, allActors) {
+		t.Fatalf("partial actor name = %+v, want no items with actors preserved", unknown)
+	}
+	for _, params := range []string{"q=", "q=does-not-match-anything"} {
+		if result := search(params); result.Actors == nil || len(result.Actors) != 0 {
+			t.Errorf("search %q actors = %#v, want a non-null empty array", params, result.Actors)
+		}
+	}
+}
+
+func TestSearchMediaUsesFolderListCovers(t *testing.T) {
+	srv, root := libraryFixture(t, "Series/ep25.mp4", "Series/ep25.jpg",
+		"Series/fallback25.mp4", "Series/still25.png")
+	folderURL := "/api/folders/" + index.NewID(root, "Series") + "/children"
+	folder := decodeLibraryResponse[index.ChildrenResult](t, localLibraryRequest(srv, "GET", folderURL, ""))
+	if len(folder.Media.Items) != 3 {
+		t.Fatalf("folder media count = %d, want 3", len(folder.Media.Items))
+	}
+	want := make(map[string]string, len(folder.Media.Items))
+	for _, item := range folder.Media.Items {
+		want[item.ID] = item.CardCover
+	}
+
+	type searchCards struct {
+		Items []struct {
+			ID        string `json:"id"`
+			CardCover string `json:"cardCover"`
+		} `json:"items"`
+	}
+	search := decodeLibraryResponse[searchCards](t, localLibraryRequest(srv, "GET", "/api/search?q=25", ""))
+	if len(search.Items) != len(want) {
+		t.Fatalf("search item count = %d, want %d", len(search.Items), len(want))
+	}
+	for _, item := range search.Items {
+		if item.CardCover == "" || item.CardCover != want[item.ID] {
+			t.Errorf("search cover for %s = %q, want %q", item.ID, item.CardCover, want[item.ID])
+		}
+	}
+}
+
 func TestRecentProgressIncludesCard(t *testing.T) {
 	srv, root := libraryFixture(t, "Series/ep.mp4", "Series/ep.jpg")
 	videoID := index.NewID(root, "Series/ep.mp4")

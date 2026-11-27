@@ -7,7 +7,9 @@ package main
 // 手机/局域网无法访问 GUI 接口，配置能力物理隔离在 PC 本机。
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -23,6 +25,7 @@ import (
 	webview2 "github.com/jchv/go-webview2"
 
 	"hestia/internal/config"
+	"hestia/internal/server"
 )
 
 const guiDPIAwarenessPerMonitorV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4)
@@ -53,10 +56,12 @@ func runGUI(a *app, finishStartup func()) {
 	previousLog := log.Writer()
 	log.SetOutput(a.logger.Writer()) // Capture WebView2 runtime errors in the application log.
 	defer log.SetOutput(previousLog)
+	currentCopy := func() guiCopy { return guiLocales[guiLanguage(a.cfgM.Get().Language)] }
 	startupError := func(detail string) {
 		a.logger.Print("GUI 初始化失败: " + detail)
 		finishStartup()
-		pTMessageBoxW.Call(0, t16(detail+"\n请查看 data\\logs\\hestia.log 后重试。"), t16("Hestia 启动失败"), 0x10) // MB_ICONERROR
+		copy := currentCopy()
+		pTMessageBoxW.Call(0, t16(detail+"\n"+copy.startupHint), t16(copy.startupTitle), 0x10) // MB_ICONERROR
 	}
 	if exe, err := os.Executable(); err == nil {
 		if message, err := os.ReadFile(filepath.Join(updateDir(exe), "last-error.txt")); err == nil {
@@ -67,16 +72,22 @@ func runGUI(a *app, finishStartup func()) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		startupError("无法启动本机控制台服务：" + err.Error())
+		startupError(currentCopy().listenerFailed + ": " + err.Error())
 		a.shutdown()
 		return
 	}
 	var w webview2.WebView
-	srv := &http.Server{Handler: buildGUIMux(a, func() {
-		if w != nil {
-			w.Dispatch(func() { w.Terminate() })
-		}
-	}), ReadHeaderTimeout: 5 * time.Second}
+	guiContext, cancelGUI := context.WithCancel(context.Background())
+	defer cancelGUI()
+	srv := &http.Server{
+		Handler: buildGUIMux(a, func() {
+			if w != nil {
+				w.Dispatch(func() { w.Terminate() })
+			}
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return guiContext },
+	}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() {
 		shutdownCtx := make(chan struct{})
@@ -98,7 +109,7 @@ func runGUI(a *app, finishStartup func()) {
 		},
 	})
 	if w == nil {
-		startupError("无法初始化 WebView2。请检查 Microsoft Edge WebView2 Runtime 是否正常安装。")
+		startupError(currentCopy().webviewFailed)
 		a.shutdown()
 		return
 	}
@@ -116,6 +127,17 @@ func runGUI(a *app, finishStartup func()) {
 	defer removeTray()
 	pageStarted := time.Now()
 	var mounted, ready, failed bool // All changes run on the WebView2 UI thread.
+	locale, _ := json.Marshal(guiLanguage(a.cfgM.Get().Language))
+	w.Init("window.hestiaConsoleLanguage = " + string(locale))
+	w.Bind("guiLocaleChanged", func() {
+		w.Dispatch(func() {
+			if mounted && !failed {
+				copy := currentCopy()
+				w.SetTitle(copy.title)
+				setTrayToolTip(copy.trayTip)
+			}
+		})
+	})
 	w.Bind("guiReady", func() {
 		w.Dispatch(func() {
 			if mounted || failed {
@@ -123,8 +145,8 @@ func runGUI(a *app, finishStartup func()) {
 			}
 			mounted = true
 			// 就绪后才注册托盘和窗口标题，避免提前唤醒隐藏窗口。
-			setupWindowChrome(syscall.Handle(w.Window()))
-			w.SetTitle("Hestia 控制台")
+			setupWindowChrome(syscall.Handle(w.Window()), currentCopy)
+			w.SetTitle(currentCopy().title)
 			showGuiWindow()
 			// A hidden WebView may throttle animation frames. Start checking after showing it.
 			w.Eval("requestAnimationFrame(() => requestAnimationFrame(() => window.guiPainted()))")
@@ -143,10 +165,11 @@ func runGUI(a *app, finishStartup func()) {
 				return
 			}
 			failed = true
-			detail := "控制台页面加载超时。"
+			copy := currentCopy()
+			detail := copy.loadTimeout
 			if mounted {
 				pTShowWindow.Call(uintptr(w.Window()), swHide)
-				detail = "控制台页面已加载，但 WebView2 未完成绘制。"
+				detail = copy.paintTimeout
 			}
 			startupError(detail)
 			w.Terminate()
@@ -155,6 +178,7 @@ func runGUI(a *app, finishStartup func()) {
 	defer timeout.Stop()
 	w.Navigate("http://" + ln.Addr().String() + "/")
 	w.Run()
+	cancelGUI()
 	a.shutdown()
 }
 
@@ -170,14 +194,15 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(v)
 	}
-	jerr := func(w http.ResponseWriter, msg string) {
+	jerrCode := func(w http.ResponseWriter, code, msg string) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
 	}
+	jerr := func(w http.ResponseWriter, msg string) { jerrCode(w, "operationFailed", msg) }
 	body := func(w http.ResponseWriter, r *http.Request, dst any) bool {
 		if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-			jerr(w, "请求格式错误")
+			jerrCode(w, "invalidRequest", "请求格式错误")
 			return false
 		}
 		return true
@@ -186,8 +211,8 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 	mux.HandleFunc("/gui/api/state", func(w http.ResponseWriter, r *http.Request) {
 		jwt(w, guiState(a))
 	})
-	// Update operations stay on the desktop-only listener and require a same-origin POST.
-	updateRequest := func(w http.ResponseWriter, r *http.Request) bool {
+	// Sensitive operations stay on the desktop-only listener and require a same-origin POST.
+	requireLocalPost := func(w http.ResponseWriter, r *http.Request) bool {
 		if r.Method != http.MethodPost || r.Header.Get("Origin") != "http://"+r.Host {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return false
@@ -195,7 +220,7 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		return true
 	}
 	mux.HandleFunc("/gui/api/update/check", func(w http.ResponseWriter, r *http.Request) {
-		if !updateRequest(w, r) {
+		if !requireLocalPost(w, r) {
 			return
 		}
 		if _, err := guiUpdater.check(r.Context()); err != nil {
@@ -205,7 +230,7 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		jwt(w, guiUpdater.snapshot())
 	})
 	mux.HandleFunc("/gui/api/update/install", func(w http.ResponseWriter, r *http.Request) {
-		if !updateRequest(w, r) {
+		if !requireLocalPost(w, r) {
 			return
 		}
 		if err := guiUpdater.start(quit); err != nil {
@@ -231,14 +256,17 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		var b struct {
 			Path string `json:"path"`
 		}
-		if !body(w, r, &b) || b.Path == "" {
-			jerr(w, "请填写路径")
+		if !body(w, r, &b) {
+			return
+		}
+		if b.Path == "" {
+			jerrCode(w, "enterFolder", "请填写路径")
 			return
 		}
 		abs := config.AbsPath(b.Path)
 		fi, err := os.Stat(abs)
 		if err != nil || !fi.IsDir() {
-			jerr(w, "路径不存在或不是文件夹："+abs)
+			jerrCode(w, "missingFolder", abs)
 			return
 		}
 		err = a.cfgM.Update(func(c *config.Config) {
@@ -264,7 +292,7 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		}
 		path := libPathByID(a, b.ID)
 		if path == "" {
-			jerr(w, "媒体库不存在")
+			jerrCode(w, "missingLibrary", "媒体库不存在")
 			return
 		}
 		_ = a.cfgM.Update(func(c *config.Config) {
@@ -288,7 +316,7 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		}
 		path := libPathByID(a, b.ID)
 		if path == "" {
-			jerr(w, "媒体库不存在")
+			jerrCode(w, "missingLibrary", "媒体库不存在")
 			return
 		}
 		_ = a.cfgM.Update(func(c *config.Config) {
@@ -308,8 +336,11 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		var b struct {
 			Port int `json:"port"`
 		}
-		if !body(w, r, &b) || b.Port < 1 || b.Port > 65535 {
-			jerr(w, "端口取值 1-65535")
+		if !body(w, r, &b) {
+			return
+		}
+		if b.Port < 1 || b.Port > 65535 {
+			jerrCode(w, "invalidPort", "端口取值 1-65535")
 			return
 		}
 		if a.srv.Running() {
@@ -319,7 +350,7 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 			}
 		}
 		if err := a.cfgM.Update(func(c *config.Config) { c.Port = b.Port }); err != nil {
-			jerr(w, "保存端口设置失败："+err.Error())
+			jerrCode(w, "saveSettingFailed", err.Error())
 			return
 		}
 		jwt(w, guiState(a))
@@ -331,16 +362,69 @@ func buildGUIMux(a *app, quit func()) *http.ServeMux {
 		if !body(w, r, &b) {
 			return
 		}
-		_ = a.cfgM.Update(func(c *config.Config) { c.AutoStart = b.Enabled })
+		if err := a.cfgM.Update(func(c *config.Config) { c.AutoStart = b.Enabled }); err != nil {
+			jerrCode(w, "saveSettingFailed", err.Error())
+			return
+		}
+		jwt(w, guiState(a))
+	})
+	mux.HandleFunc("POST /gui/api/covers/generate", func(w http.ResponseWriter, r *http.Request) {
+		if !requireLocalPost(w, r) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.Header().Set("Cache-Control", "no-store")
+		encoder := json.NewEncoder(w)
+		response := http.NewResponseController(w)
+		started := false
+		err := a.srv.GenerateCovers(r.Context(), func(progress server.CoverProgress) error {
+			started = true
+			if err := encoder.Encode(progress); err != nil {
+				return err
+			}
+			return response.Flush()
+		})
+		switch {
+		case err == nil, r.Context().Err() != nil:
+		case errors.Is(err, server.ErrCoverGenerationRunning):
+			jerrCode(w, "coverAlreadyRunning", "正在生成封面")
+		case errors.Is(err, server.ErrCoverScanInProgress):
+			jerrCode(w, "coverWaitForScan", "请等待媒体库扫描完成")
+		default:
+			a.logger.Printf("封面生成中断: %v", err)
+			if !started {
+				jerr(w, err.Error())
+			}
+		}
+	})
+	mux.HandleFunc("POST /gui/api/language", func(w http.ResponseWriter, r *http.Request) {
+		if !requireLocalPost(w, r) {
+			return
+		}
+		var b struct {
+			Language string `json:"language"`
+		}
+		if !body(w, r, &b) {
+			return
+		}
+		if _, ok := guiLocales[b.Language]; !ok {
+			jerrCode(w, "invalidLanguage", "不支持此语言")
+			return
+		}
+		if err := a.cfgM.Update(func(c *config.Config) { c.Language = b.Language }); err != nil {
+			jerrCode(w, "saveSettingFailed", err.Error())
+			return
+		}
 		jwt(w, guiState(a))
 	})
 	mux.HandleFunc("/gui/api/pickdir", func(w http.ResponseWriter, r *http.Request) {
-		jwt(w, map[string]any{"path": pickFolderDialog("选择媒体库文件夹")})
+		copy := guiLocales[guiLanguage(a.cfgM.Get().Language)]
+		jwt(w, map[string]any{"path": pickFolderDialog(copy.pickFolder)})
 	})
 	mux.HandleFunc("/gui/api/open", func(w http.ResponseWriter, r *http.Request) {
 		url := a.srv.LocalURL()
 		if url == "" {
-			jerr(w, "请先启动服务")
+			jerrCode(w, "startServerFirst", "请先启动服务")
 			return
 		}
 		openBrowser(url)
@@ -380,7 +464,8 @@ func guiState(a *app) map[string]any {
 		"activePort": a.srv.Port(),
 		"update":     guiUpdater.snapshot(),
 		"port":       c.Port, "autoStart": c.AutoStart,
-		"ffmpeg": a.tc.FFmpegOK(), "ffmpegPath": a.tc.FFmpeg,
+		"language": guiLanguage(c.Language),
+		"ffmpeg":   a.tc.FFmpegOK(), "ffmpegPath": a.tc.FFmpeg,
 		"scanning": a.store.AnyScanning(), "folders": folders, "media": media,
 		"libs": libJSON,
 	}

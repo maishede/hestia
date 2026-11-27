@@ -1,10 +1,12 @@
 // 通用工具：格式化、DOM、toast、图标、排序偏好
+import { number, t } from './i18n.js'
+
 export function fmtSize(n) {
   if (!n && n !== 0) return ''
-  if (n < 1024) return n + ' B'
-  if (n < 1024 ** 2) return (n / 1024).toFixed(0) + ' KB'
-  if (n < 1024 ** 3) return (n / 1024 ** 2).toFixed(1) + ' MB'
-  return (n / 1024 ** 3).toFixed(2) + ' GB'
+  if (n < 1024) return number(n) + ' B'
+  if (n < 1024 ** 2) return number(Math.round(n / 1024)) + ' KB'
+  if (n < 1024 ** 3) return number(n / 1024 ** 2, 1) + ' MB'
+  return number(n / 1024 ** 3, 2) + ' GB'
 }
 
 export function fmtDur(sec) {
@@ -88,9 +90,10 @@ export function sortBarEl(current, fields, onChange) {
   const wrap = document.createElement('div')
   wrap.className = 'sortbar'
   const opts = fields.map(f => `<option value="${f.key}" ${f.key === current.key ? 'selected' : ''}>${f.label}</option>`).join('')
+  const direction = esc(t(current.order === 'asc' ? 'ascending' : 'descending'))
   wrap.innerHTML = `
-    <select class="sort-sel" title="排序方式">${opts}</select>
-    <button class="sort-dir" title="${current.order === 'asc' ? '正序（点击切换倒序）' : '倒序（点击切换正序）'}">${current.order === 'asc' ? '↑' : '↓'}</button>`
+    <select class="sort-sel" title="${esc(t('sort'))}" aria-label="${esc(t('sort'))}">${opts}</select>
+    <button class="sort-dir" title="${direction}" aria-label="${direction}">${current.order === 'asc' ? '↑' : '↓'}</button>`
   const sel = wrap.querySelector('select')
   const dir = wrap.querySelector('.sort-dir')
   const fire = () => onChange({ key: sel.value, order: dir.textContent.trim() === '↑' ? 'asc' : 'desc' })
@@ -98,7 +101,8 @@ export function sortBarEl(current, fields, onChange) {
   dir.addEventListener('click', () => {
     const asc = dir.textContent.trim() === '↑'
     dir.textContent = asc ? '↓' : '↑'
-    dir.title = asc ? '倒序（点击切换正序）' : '正序（点击切换倒序）'
+    dir.title = t(asc ? 'descending' : 'ascending')
+    dir.setAttribute('aria-label', dir.title)
     fire()
   })
   return wrap

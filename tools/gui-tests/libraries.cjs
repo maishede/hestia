@@ -140,3 +140,121 @@ test('the service bar stays visible when the library list scrolls', async t => {
   assert.ok(await page.locator('.workspace').evaluate(element => element.scrollTop > 0))
   assert.deepEqual(await serviceBar.boundingBox(), bounds)
 })
+
+test('console settings save the locale', async t => {
+  const state = consoleState()
+  const page = await openConsole(t, (action, body) => {
+    if (action === 'language') state.language = body.language
+    return state
+  }, { width: 430, height: 460 })
+
+  await page.getByRole('button', { name: '设置' }).click()
+  await page.getByRole('combobox', { name: '语言' }).selectOption('en')
+  const settings = page.getByRole('dialog', { name: 'Settings' })
+  await settings.getByRole('combobox', { name: 'Language' }).waitFor()
+  assert.equal(await page.locator('html').getAttribute('lang'), 'en')
+  await settings.getByRole('combobox', { name: 'Language' }).selectOption('ja')
+  await page.getByRole('heading', { name: '設定' }).waitFor()
+  await page.reload()
+  await page.getByRole('heading', { name: 'メディアライブラリ' }).waitFor()
+  assert.equal(await page.locator('html').getAttribute('lang'), 'ja')
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 430)
+})
+
+test('cover generation starts only from the dialog and displays cache hits', async t => {
+  const page = await openConsole(t, () => consoleState(), { width: 430, height: 460 })
+  const requested = []
+  let reply
+  const response = new Promise(resolve => { reply = resolve })
+  await page.route('**/gui/api/covers/generate', async route => {
+    requested.push(route.request().method())
+    await response
+    await route.fulfill({
+      contentType: 'application/x-ndjson',
+      body: [
+        { total: 4, processed: 0, generated: 0, cached: 0, skipped: 0, failed: 0, done: false },
+        { total: 4, processed: 4, generated: 1, cached: 3, skipped: 0, failed: 0, done: true },
+      ].map(snapshot => JSON.stringify(snapshot)).join('\n') + '\n',
+    })
+  })
+  t.after(() => reply())
+
+  await page.getByRole('button', { name: '生成封面' }).click({ timeout: 5000 })
+  const dialog = page.getByRole('dialog', { name: '生成封面' })
+  await dialog.waitFor()
+  const progress = dialog.locator('progress')
+  assert.equal(await progress.isVisible(), false)
+  assert.deepEqual(requested, [])
+  await dialog.getByRole('button', { name: '开始', exact: true }).click()
+  await progress.waitFor()
+  assert.equal(await progress.getAttribute('value'), null)
+  await dialog.getByRole('button', { name: '停止', exact: true }).waitFor()
+  reply()
+  await dialog.getByText('封面生成完成').waitFor()
+  assert.equal(await progress.getAttribute('value'), '4')
+  await dialog.getByText('已缓存 3 项', { exact: false }).waitFor()
+  assert.deepEqual(requested, ['POST'])
+  await dialog.getByRole('button', { name: '关闭', exact: true }).last().click()
+  await dialog.waitFor({ state: 'hidden' })
+})
+
+test('stopping cover generation cancels the request and keeps the dialog open', async t => {
+  const page = await openConsole(t, () => consoleState())
+  let entered, release
+  const started = new Promise(resolve => { entered = resolve })
+  const pending = new Promise(resolve => { release = resolve })
+  await page.route('**/gui/api/covers/generate', async route => {
+    entered()
+    await pending
+    await route.abort().catch(() => {})
+  })
+
+  try {
+    await page.getByRole('button', { name: '生成封面' }).click()
+    const dialog = page.getByRole('dialog', { name: '生成封面' })
+    await dialog.getByRole('button', { name: '开始', exact: true }).click()
+    await started
+    await dialog.getByRole('button', { name: '停止', exact: true }).click()
+    await dialog.getByText('已停止生成', { exact: false }).waitFor()
+    assert.equal(await dialog.isVisible(), true)
+    assert.equal(await dialog.getByRole('button', { name: '开始', exact: true }).isEnabled(), true)
+  } finally { release() }
+})
+
+test('cover generation keeps running when dismissed and shows the result with failure details', async t => {
+  const page = await openConsole(t, () => consoleState())
+  let entered, finish
+  const started = new Promise(resolve => { entered = resolve })
+  const response = new Promise(resolve => { finish = resolve })
+  await page.route('**/gui/api/covers/generate', async route => {
+    entered()
+    await response
+    await route.fulfill({
+      contentType: 'application/x-ndjson',
+      body: JSON.stringify({
+        total: 3, processed: 3, generated: 1, cached: 1, skipped: 0, failed: 1, done: true,
+        issues: [{ path: 'D:\\媒体\\损坏.jpg', reason: 'imageRead' }],
+      }) + '\n',
+    })
+  })
+
+  try {
+    await page.getByRole('button', { name: '生成封面' }).click()
+    const dialog = page.getByRole('dialog', { name: '生成封面' })
+    await dialog.getByRole('button', { name: '开始', exact: true }).click()
+    await started
+    await dialog.getByRole('button', { name: '收起', exact: true }).last().click({ timeout: 5000 })
+    await dialog.waitFor({ state: 'hidden' })
+    await page.getByText('封面正在后台生成', { exact: false }).waitFor()
+    await page.getByRole('button', { name: '设置' }).click()
+    finish()
+    await page.waitForFunction(() => document.getElementById('coverStatus').textContent === '封面生成完成')
+    assert.equal(await dialog.isVisible(), false)
+    await page.keyboard.press('Escape')
+    await dialog.waitFor()
+    await dialog.getByText('未生成 1 项', { exact: true }).waitFor()
+    await dialog.getByText('查看未生成原因').click()
+    await dialog.getByText('损坏.jpg', { exact: true }).waitFor()
+    await dialog.getByText('图片无法读取或解码').waitFor()
+  } finally { finish() }
+})

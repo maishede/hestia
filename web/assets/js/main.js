@@ -4,7 +4,8 @@ import { FolderView } from './views/folder.js'
 import { SearchView } from './views/search.js'
 import { PlayerView } from './views/player.js'
 import { ImageView } from './views/imageview.js'
-import { returnHomeHref, withHome } from './navigation.js'
+import { language, setLanguage, t } from './i18n.js'
+import { homeHref, returnHomeHref, routeQuery, searchHref } from './navigation.js'
 import { esc } from './util.js'
 
 const routes = [
@@ -16,16 +17,19 @@ const routes = [
 ]
 
 let current = null
+let currentPath = ''
 let routeGeneration = 0
 const app = document.getElementById('app')
 
-async function route() {
+async function route(force = false) {
   const path = (location.hash || '#/').split('?', 1)[0]
   document.querySelector('.brand').href = returnHomeHref()
-  if (path === '#/' && current?.updateRoute) {
+  if (!force && path === currentPath && current?.updateRoute) {
     current.updateRoute()
+    updateClearButton()
     return
   }
+  const viewState = force ? current?.saveViewState?.() : undefined
   const generation = ++routeGeneration
   for (const r of routes) {
     const m = path.match(r.re)
@@ -41,16 +45,18 @@ async function route() {
       try {
         const view = r.view === PlayerView || r.view === ImageView
           ? await r.view(app, ...m.slice(1), () => generation === routeGeneration)
-          : await r.view(app, ...m.slice(1))
+          : await r.view(app, ...m.slice(1), viewState)
         if (generation !== routeGeneration) {
           if (view && view.destroy) view.destroy()
           return
         }
         current = view
+        currentPath = path
+        updateClearButton()
       } catch (e) {
         if (generation !== routeGeneration) return
         console.error(e)
-        app.innerHTML = `<div class="empty-state"><p>加载失败：${esc(e.message)}</p><p class="hint">请刷新重试</p></div>`
+        app.innerHTML = `<div class="empty-state"><p>${esc(t('loadError', { detail: e.message }))}</p><p class="hint">${esc(t('retryRefresh'))}</p></div>`
       }
       return
     }
@@ -58,14 +64,57 @@ async function route() {
   location.hash = '#/'
 }
 
-window.addEventListener('hashchange', route)
-route()
-
 const form = document.getElementById('searchForm')
 const input = document.getElementById('searchInput')
+const clear = document.getElementById('clearSearch')
+const languageSelect = document.getElementById('languageSelect')
+
+function updateClearButton() {
+  clear.hidden = input.value.length === 0
+}
+
+function localizeTopbar() {
+  document.documentElement.lang = language
+  document.title = t('title')
+  document.querySelector('.brand').setAttribute('aria-label', t('home'))
+  input.placeholder = t('searchHint')
+  input.setAttribute('aria-label', t('searchHint'))
+  clear.setAttribute('aria-label', t('clearSearch'))
+  clear.title = t('clearSearch')
+  languageSelect.value = language
+  languageSelect.title = t('language')
+  languageSelect.setAttribute('aria-label', t('language'))
+}
+
+languageSelect.addEventListener('change', () => {
+  if (setLanguage(languageSelect.value)) {
+    localizeTopbar()
+    route(true)
+  }
+})
+localizeTopbar()
+window.addEventListener('hashchange', () => route())
+route()
+
+input.addEventListener('input', updateClearButton)
+clear.onclick = () => {
+  current?.cancelPendingSearch?.()
+  input.value = ''
+  updateClearButton()
+  const home = homeHref()
+  if (location.hash !== home) {
+    window.addEventListener('hashchange', () => input.focus(), { once: true })
+    location.hash = home
+  } else {
+    input.focus()
+  }
+}
 form.addEventListener('submit', e => {
   e.preventDefault()
   const q = input.value.trim()
-  if (q) location.hash = withHome('#/search?q=' + encodeURIComponent(q))
+  if (q) {
+    const actor = currentPath === '#/search' ? routeQuery().get('actor') || '' : ''
+    location.hash = searchHref(q, actor)
+  }
   else input.focus()
 })

@@ -24,18 +24,25 @@ type mediaAccess struct {
 }
 
 func (s *Server) beginMediaRead(w http.ResponseWriter, r *http.Request, folderID string) (context.Context, func(), bool) {
-	if r.Context().Err() != nil {
-		return nil, nil, false
+	ctx, endRead, err := s.startMediaRead(r.Context(), folderID)
+	if err == errFolderDeleting {
+		errJSON(w, http.StatusConflict, err.Error())
 	}
-	ctx, cancel := context.WithCancel(r.Context())
+	return ctx, endRead, err == nil
+}
+
+func (s *Server) startMediaRead(parent context.Context, folderID string) (context.Context, func(), error) {
+	if err := parent.Err(); err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
 	read := &mediaRead{cancel: cancel, done: make(chan struct{})}
 	access := &s.mediaAccess
 	access.mu.Lock()
 	if access.blocked[folderID] {
 		access.mu.Unlock()
 		cancel()
-		errJSON(w, http.StatusConflict, errFolderDeleting.Error())
-		return nil, nil, false
+		return nil, nil, errFolderDeleting
 	}
 	if access.reads == nil {
 		access.reads = make(map[string]map[*mediaRead]struct{})
@@ -54,7 +61,7 @@ func (s *Server) beginMediaRead(w http.ResponseWriter, r *http.Request, folderID
 		}
 		close(read.done)
 		access.mu.Unlock()
-	}, true
+	}, nil
 }
 
 func mediaReadCanceled(ctx context.Context, w http.ResponseWriter, r *http.Request) bool {

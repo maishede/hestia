@@ -22,7 +22,7 @@ import (
 	"hestia/internal/progress"
 )
 
-const Version = "0.4.4"
+const Version = "0.4.5"
 
 type Server struct {
 	deleteAccessCode string
@@ -44,11 +44,12 @@ type Server struct {
 	requestedPort int
 	listen        string
 
-	mediaAccess mediaAccess
-	imageJobs   imageJobs
-	imageSlots  chan struct{}
-	frameSlots  chan struct{}
-	subMu       sync.Mutex // 串行化 ffmpeg 字幕提取
+	mediaAccess     mediaAccess
+	imageJobs       imageJobs
+	imageSlots      chan struct{}
+	frameSlots      chan struct{}
+	coverGeneration sync.Mutex
+	subMu           sync.Mutex // 串行化 ffmpeg 字幕提取
 }
 
 func New(cfg *config.Manager, store *index.Store, tc Toolchain, tr *Transcoder, prog *progress.Store, dataDir string, webFS fs.FS, logger *log.Logger) (*Server, error) {

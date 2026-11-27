@@ -6,6 +6,36 @@ import (
 	"testing"
 )
 
+func TestCoverMediaIDsWaitForEnabledLibraryScan(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "library")
+	const file = "Series/clip.mp4"
+	writeScanFile(t, root, file)
+	store, err := New(filepath.Join(base, "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	libID, err := store.AddLibrary(root, "Library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.libs[libID].Scanning = true
+	store.mu.Unlock()
+	if ids, ready := store.CoverMediaIDs(); ready || len(ids) != 0 {
+		t.Fatalf("snapshot during scan: ids = %v, ready = %v", ids, ready)
+	}
+
+	if err := store.RescanLibrary(libID); err != nil {
+		t.Fatal(err)
+	}
+	want := NewID(root, file)
+	if ids, ready := store.CoverMediaIDs(); !ready || len(ids) != 1 || ids[0] != want {
+		t.Fatalf("snapshot after scan: ids = %v, ready = %v, want %s", ids, ready, want)
+	}
+}
+
 func TestRescanUnavailableLibraryHidesStaleContentAndRecovers(t *testing.T) {
 	for _, replaceWithFile := range []bool{false, true} {
 		name := "missing"

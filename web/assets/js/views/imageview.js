@@ -1,11 +1,12 @@
 // 图片详情：复用列表缩略图，需要时加载原图。
+import { t } from '../i18n.js'
 import { api } from '../api.js'
 import { mountFolderDelete } from '../delete-dialog.js'
 import { returnHomeHref, withHome } from '../navigation.js'
 import { icon, esc } from '../util.js'
 
 export async function ImageView(app, id, isCurrent = () => true) {
-  app.innerHTML = '<div class="empty-state"><p>正在加载图片…</p></div>'
+  app.innerHTML = `<div class="empty-state"><p>${esc(t('imageLoading'))}</p></div>`
   const meta = await api(`/api/media/${id}`)
   if (!isCurrent()) return null
   const root = document.createElement('section')
@@ -14,20 +15,20 @@ export async function ImageView(app, id, isCurrent = () => true) {
   const folder = meta.folderId ? withHome(`#/folder/${meta.folderId}`, home) : ''
   root.innerHTML = `
     <div class="detail-header">
-      <a class="btn ghost sm" href="${esc(home)}">返回主页</a>
-      ${folder ? `<a class="btn ghost sm" href="${esc(folder)}">返回文件夹</a>` : ''}
+      <a class="btn ghost sm" href="${esc(home)}">${esc(t('backHome'))}</a>
+      ${folder ? `<a class="btn ghost sm" href="${esc(folder)}">${esc(t('backFolder'))}</a>` : ''}
       <div class="detail-title">
         <h1 id="iv-title">${esc(meta.name)}</h1>
         <p>${esc(meta.folderName || '')}</p>
       </div>
-      <button type="button" class="btn ghost sm" id="iv-original">加载原图</button>
-      ${meta.canDelete || meta.deleteCodeRequired ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
+      <button type="button" class="btn ghost sm" id="iv-original">${esc(t('loadOriginal'))}</button>
+      ${meta.canDelete || meta.deleteCodeRequired ? `<button type="button" class="btn danger sm" id="detail-delete">${esc(t('deleteFolderMedia'))}</button>` : ''}
     </div>
     <div class="image-view">
       <div class="iv-img-wrap"><img id="img" alt="${esc(meta.name)}"></div>
-      <p class="iv-status" role="status">正在加载图片…</p>
-      <button type="button" class="iv-arrow left" id="iv-prev" aria-label="上一张">${icon('back', 20)}</button>
-      <button type="button" class="iv-arrow right" id="iv-next" aria-label="下一张">${icon('fwd', 20)}</button>
+      <p class="iv-status" role="status">${esc(t('imageLoading'))}</p>
+      <button type="button" class="iv-arrow left" id="iv-prev" aria-label="${esc(t('previousImage'))}">${icon('back', 20)}</button>
+      <button type="button" class="iv-arrow right" id="iv-next" aria-label="${esc(t('nextImage'))}">${icon('fwd', 20)}</button>
     </div>`
   app.replaceChildren(root)
 
@@ -44,7 +45,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
   function showImage(original = false) {
     if (stopped) return
     status.hidden = false
-    status.textContent = '正在加载图片…'
+    status.textContent = t('imageLoading')
     originalButton.disabled = original
     img.src = `/api/media/${meta.id}/image${original ? '' : '?w=480'}`
   }
@@ -52,7 +53,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
   img.addEventListener('error', () => {
     if (stopped) return
     status.hidden = false
-    status.textContent = '图片加载失败'
+    status.textContent = t('imageFailed')
     originalButton.disabled = false
   })
   function syncNavigation() {
@@ -121,7 +122,7 @@ export async function ImageView(app, id, isCurrent = () => true) {
   const releaseImage = () => {
     stopped = true
     img.removeAttribute('src')
-    status.textContent = '图片已关闭'
+    status.textContent = t('imageClosed')
     status.hidden = false
     originalButton.disabled = true
   }

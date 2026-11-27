@@ -1,20 +1,26 @@
 // Hestia 控制台：通过本机回环 API 读取和修改服务状态。
 const $ = id => document.getElementById(id)
-const count = new Intl.NumberFormat('zh-CN')
 let state = null
+setConsoleLanguage(window.hestiaConsoleLanguage)
 
-async function api(path, body) {
+async function guiRequest(path, body, signal) {
   const response = await fetch('/gui/api/' + path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
+    signal,
   })
   if (!response.ok) {
-    let message = 'HTTP ' + response.status
-    try { message = (await response.json()).error || message } catch {}
-    throw new Error(message)
+    let failure = {}
+    try { failure = await response.json() } catch {}
+    const code = Object.hasOwn(consoleMessages, failure?.code) ? failure.code : 'operationFailed'
+    throw new Error(t(code, { detail: failure?.error || 'HTTP ' + response.status }))
   }
-  return response.json()
+  return response
+}
+
+async function api(path, body) {
+  return (await guiRequest(path, body)).json()
 }
 
 function text(el, value) {
@@ -43,17 +49,17 @@ function renderLibraryRow(row, library) {
   message.classList.toggle('error', status === 'error')
   message.title = status === 'error' ? library.lastErr : ''
   text(message, {
-    off: '已停用',
-    scan: `扫描中… ${count.format(library.files)} 项`,
-    error: '文件夹无法访问，内容已隐藏。请检查路径或磁盘后重新扫描，也可以在更多操作中移除。',
+    off: t('disabled'),
+    scan: t('scanningItems', { number: count.format(library.files) }),
+    error: t('inaccessible'),
     ready: '',
   }[status])
-  text(row.querySelector('.media-count'), status === 'ready' ? `${count.format(library.files)} 个媒体` : '—')
-  text(row.querySelector('.folder-count'), status === 'ready' ? `${count.format(library.dirs)} 个文件夹` : '')
+  text(row.querySelector('.media-count'), status === 'ready' ? quantity(library.files, 'media') : '—')
+  text(row.querySelector('.folder-count'), status === 'ready' ? quantity(library.dirs, 'folder') : '')
   const toggle = row.querySelector('.liben')
-  toggle.setAttribute('aria-label', `${library.label} · 启用媒体库`)
+  toggle.setAttribute('aria-label', t('enableLibrary', { name: library.label }))
   if (!toggle.disabled) toggle.checked = library.enabled
-  row.querySelector('.libmore').setAttribute('aria-label', `${library.label} · 更多操作`)
+  row.querySelector('.libmore').setAttribute('aria-label', t('moreActions', { name: library.label }))
 }
 
 function renderLibraries(libraries) {
@@ -80,10 +86,10 @@ function renderAddresses(s) {
   const list = $('accessAddresses')
   list.replaceChildren()
   const addresses = [
-    ...(s.localUrl ? [['本机访问', s.localUrl]] : []),
-    ...s.urls.map(url => ['局域网访问', url]),
+    ...(s.localUrl ? [[t('localAccess'), s.localUrl]] : []),
+    ...s.urls.map(url => [t('lanAccess'), url]),
   ]
-  if (!addresses.length) list.textContent = '服务未运行。'
+  if (!addresses.length) list.textContent = t('serverNotRunning')
   for (const [label, address] of addresses) {
     const row = document.createElement('div')
     row.className = 'connection-row'
@@ -96,54 +102,63 @@ function renderAddresses(s) {
     const copy = document.createElement('button')
     copy.type = 'button'
     copy.className = 'btn border'
-    copy.textContent = '复制'
-    copy.setAttribute('aria-label', `复制${label}地址 ${address}`)
+    copy.textContent = t('copy')
+    copy.setAttribute('aria-label', t('copyFor', { label, address }))
     copy.onclick = () => copyAddress(address)
     row.append(details, copy)
     list.append(row)
   }
   $('portNote').hidden = !s.localUrl || s.activePort === s.port
-  text($('portNote'), `配置端口 ${s.port}，实际使用 ${s.activePort}。`)
+  text($('portNote'), t('portNote', { configured: s.port, active: s.activePort }))
 }
 
 function render(s) {
   const previous = state
   state = s
+  const localeChanged = setConsoleLanguage(s.language)
+  if (localeChanged) window.guiLocaleChanged?.()
   $('dot').classList.toggle('on', s.running)
-  text($('stateText'), s.running ? '运行中' : '已停止')
-  text($('btnToggle'), s.running ? '停止服务' : '启动服务')
+  text($('stateText'), t(s.running ? 'running' : 'stopped'))
+  text($('btnToggle'), t(s.running ? 'stopServer' : 'startServer'))
   $('btnToggle').disabled = false
   $('btnOpen').disabled = !s.running
   $('btnAccess').disabled = !s.running
   const address = primaryAddress(s)
-  text($('btnAccess'), s.urls.length ? '手机访问' : '本机访问')
+  text($('btnAccess'), t(s.urls.length ? 'mobileAccess' : 'localAccess'))
   text($('urlText'), address ? address.replace(/^https?:\/\//, '') : '—')
   $('urlText').title = address || ''
   $('btnCopy').hidden = !address
-  if ($('accessDialog').open && (s.localUrl !== previous?.localUrl || s.port !== previous?.port || s.activePort !== previous?.activePort ||
+  if ($('accessDialog').open && (localeChanged || s.localUrl !== previous?.localUrl || s.port !== previous?.port || s.activePort !== previous?.activePort ||
       s.urls.join('\n') !== previous?.urls.join('\n'))) renderAddresses(s)
+  if (localeChanged && $('removeDialog').open) renderRemoveDescription(s.libs.find(item => item.id === removeID))
 
   renderLibraries(s.libs)
-  text($('statText'), `${count.format(s.media)} 个媒体 · ${count.format(s.folders)} 个文件夹${s.scanning ? ' · 扫描中' : ''}`)
-  $('btnRescan').disabled = s.scanning || !s.libs.some(lib => lib.enabled)
+  const summary = [quantity(s.media, 'media'), quantity(s.folders, 'folder')]
+  if (s.scanning) summary.push(t('scanning'))
+  text($('statText'), summary.join(' · '))
+  const hasLibrary = s.libs.some(lib => lib.enabled)
+  $('btnRescan').disabled = s.scanning || !hasLibrary
   $('btnRescan').classList.toggle('busy', s.scanning)
-  text($('btnRescan').querySelector('span'), s.scanning ? '扫描中…' : '重新扫描')
+  text($('btnRescan').querySelector('span'), t(s.scanning ? 'scanningEllipsis' : 'rescan'))
+  renderCoverDialog()
 
   if (s.port !== previous?.port) $('portInput').value = s.port
   if (!$('chkAuto').disabled) $('chkAuto').checked = s.autoStart
-  text($('ffText'), s.ffmpeg ? `已就绪 · ${s.ffmpegPath}` : '未检测到 FFmpeg。播放需要转码时，请将它放到程序目录或加入 PATH。')
+  if (!previous) $('languageSelect').disabled = false
+  if (!$('languageSelect').disabled) $('languageSelect').value = consoleLanguages[localeIndex]
+  text($('ffText'), s.ffmpeg ? t('ffmpegReady', { path: s.ffmpegPath }) : t('ffmpegMissing'))
   const update = s.update
   text($('currentVersion'), 'v' + update.current)
   const updateMessages = {
-    idle: '点击「检查更新」查看是否有新版本',
-    checking: '正在从 GitHub 检查最新版本…',
-    current: '已是最新版本',
-    available: `发现新版本 v${update.latest}，建议下载安装`,
-    downloading: `正在下载并校验新版本…${update.progress >= 0 ? ' ' + update.progress + '%' : ''}`,
-    restarting: '校验完成，正在重启到新版本…',
-    error: update.error || '更新失败',
+    idle: t('updateIdle'),
+    checking: t('updateChecking'),
+    current: t('updateCurrent'),
+    available: t('updateAvailable', { version: update.latest }),
+    downloading: t('updateDownloading') + (update.progress >= 0 ? ' ' + count.format(update.progress) + '%' : ''),
+    restarting: t('updateRestarting'),
+    error: t('updateFailed') + (update.error ? ' · ' + update.error : ''),
   }
-  text($('updateText'), updateMessages[update.status] || '更新状态未知')
+  text($('updateText'), updateMessages[update.status] || t('updateUnknown'))
   $('btnCheckUpdate').disabled = ['checking', 'downloading', 'restarting'].includes(update.status)
   $('btnInstallUpdate').hidden = update.status !== 'available'
   $('updateProgress').hidden = update.status !== 'downloading' || update.progress < 0
@@ -170,12 +185,12 @@ function act(action) {
 async function copyAddress(address) {
   try {
     await navigator.clipboard.writeText(address)
-    toast('已复制访问地址')
+    toast(t('copied'))
   } catch {
     if (!$('accessDialog').open && state) {
       openAddresses()
     }
-    toast('无法自动复制，请选中地址并按 Ctrl+C', true)
+    toast(t('copyFailed'), true)
   }
 }
 
@@ -199,12 +214,190 @@ $('btnSettings').onclick = () => {
 }
 $('btnAddFolder').onclick = () => $('addDialog').showModal()
 
+let coverRequest = null
+let coverSnapshot = null
+let coverPhase = ''
+let coverError = ''
+let coverIssues = []
+let coverIssueLocale = -1
+let coverResultPending = false
+
+function renderCoverIssues() {
+  const details = $('coverIssues')
+  const list = $('coverIssueList')
+  details.hidden = coverIssues.length === 0
+  if (!details.open) return
+  if (coverIssueLocale !== localeIndex) {
+    list.replaceChildren()
+    coverIssueLocale = localeIndex
+  }
+  const reasonKeys = {
+    sourceMissing: 'coverIssueSource',
+    imageRead: 'coverIssueImage',
+    videoFrame: 'coverIssueVideo',
+    cacheWrite: 'coverIssueCache',
+    other: 'coverIssueOther',
+  }
+  const next = document.createDocumentFragment()
+  for (const issue of coverIssues.slice(list.children.length)) {
+    const li = document.createElement('li')
+    const name = document.createElement('strong')
+    const reason = document.createElement('span')
+    name.textContent = issue.path.split(/[\\/]/).at(-1) || issue.path
+    name.title = issue.path
+    reason.className = 'muted'
+    reason.textContent = t(reasonKeys[issue.reason] || 'coverIssueOther')
+    li.append(name, reason)
+    next.append(li)
+  }
+  list.append(next)
+}
+
+function resetCoverResult() {
+  coverSnapshot = null
+  coverPhase = coverError = ''
+  coverIssues = []
+  $('coverIssues').open = false
+  $('coverIssueList').replaceChildren()
+}
+
+function renderCoverDialog() {
+  const active = coverRequest !== null
+  const trigger = $('btnGenerateCovers')
+  const hasLibrary = state?.libs.some(lib => lib.enabled)
+  const progress = $('coverProgress')
+  const status = $('coverStatus')
+  const processedText = $('coverProcessed')
+  const counts = $('coverCounts')
+  const phase = coverPhase || (state?.scanning ? 'coverWaitForScan' : '')
+  const triggerLabel = t(active ? 'coverView' : 'generateCovers')
+  const percent = active && coverSnapshot?.total
+    ? coverSnapshot.processed / coverSnapshot.total : null
+  trigger.disabled = !active && !hasLibrary
+  trigger.setAttribute('aria-label', triggerLabel)
+  text(trigger, percent === null ? triggerLabel : triggerLabel + ' · ' + percent.toLocaleString(consoleLanguages[localeIndex], { style: 'percent' }))
+  $('coverIntro').hidden = active || !!coverSnapshot
+  text(status, coverError || (phase ? t(phase) : ''))
+  status.hidden = !status.textContent
+  progress.hidden = !active && !coverSnapshot
+  if (coverSnapshot) {
+    const { total, processed, generated, cached, skipped, failed } = coverSnapshot
+    progress.max = total || 1
+    progress.value = total ? processed : 1
+    text(processedText, t('coverProcessed', { done: count.format(processed), total: count.format(total) }))
+    const details = [
+      t('coverGenerated', { number: count.format(generated) }),
+      t('coverCached', { number: count.format(cached) }),
+    ]
+    if (skipped) details.push(t('coverSkipped', { number: count.format(skipped) }))
+    if (failed) details.push(t('coverFailed', { number: count.format(failed) }))
+    counts.replaceChildren(...details.map(value => {
+      const item = document.createElement('span')
+      item.textContent = value
+      return item
+    }))
+  } else {
+    progress.removeAttribute('value')
+  }
+  processedText.hidden = !coverSnapshot
+  counts.hidden = !coverSnapshot
+  renderCoverIssues()
+  const dismissLabel = t(active ? 'coverHide' : 'close')
+  $('btnCoverX').setAttribute('aria-label', dismissLabel)
+  $('btnCoverX').title = dismissLabel
+  $('btnCoverClose').hidden = active
+  $('btnCoverStop').hidden = !active
+  $('btnCoverStop').disabled = active && coverRequest.signal.aborted
+  $('btnCoverHide').hidden = !active
+  $('btnCoverStart').hidden = active || !!coverSnapshot?.done
+  $('btnCoverStart').disabled = !!state?.scanning || !hasLibrary
+}
+
+$('btnGenerateCovers').onclick = () => {
+  if (!coverRequest && !coverResultPending) resetCoverResult()
+  coverResultPending = false
+  renderCoverDialog()
+  $('coverDialog').showModal()
+  if (coverRequest) $('btnCoverHide').focus()
+}
+
+function hideCoverDialog() {
+  $('coverDialog').close()
+  if (coverRequest) toast(t('coverInBackground'))
+}
+
+function showCoverResult() {
+  if (!coverResultPending || document.hidden || document.querySelector('dialog[open]')) return
+  coverResultPending = false
+  $('coverDialog').showModal()
+  $('btnCoverClose').focus()
+}
+
+document.addEventListener('close', showCoverResult, true)
+document.addEventListener('visibilitychange', showCoverResult)
+window.addEventListener('focus', showCoverResult)
+$('btnCoverX').onclick = hideCoverDialog
+$('btnCoverHide').onclick = hideCoverDialog
+$('coverIssues').addEventListener('toggle', renderCoverIssues)
+$('btnCoverStop').onclick = () => {
+  coverRequest?.abort()
+  renderCoverDialog()
+}
+$('coverDialog').addEventListener('cancel', event => {
+  if (coverRequest) {
+    event.preventDefault()
+    hideCoverDialog()
+  }
+})
+
+$('btnCoverStart').onclick = async () => {
+  if (coverRequest) return
+  const controller = new AbortController()
+  resetCoverResult()
+  coverRequest = controller
+  coverPhase = 'coverPreparing'
+  renderCoverDialog()
+  $('btnCoverHide').focus()
+  try {
+    const response = await guiRequest('covers/generate', {}, controller.signal)
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      const lines = (buffer + value).split('\n')
+      buffer = lines.pop()
+      for (const line of lines) {
+        if (!line) continue
+        const { issues = [], ...progress } = JSON.parse(line)
+        coverIssues.push(...issues)
+        coverSnapshot = progress
+        coverPhase = coverSnapshot.done ? (coverSnapshot.total ? 'coverDone' : 'coverEmpty') : 'coverGenerating'
+      }
+      renderCoverDialog()
+    }
+    if (!coverSnapshot?.done) throw new Error(t('coverInterrupted'))
+  } catch (error) {
+    coverPhase = controller.signal.aborted ? 'coverStopped' : 'coverInterrupted'
+    if (!controller.signal.aborted) coverError = error.message
+  } finally {
+    controller.abort()
+    coverRequest = null
+    renderCoverDialog()
+    if ($('coverDialog').open) $('btnCoverClose').focus()
+    else if (coverPhase !== 'coverStopped') {
+      coverResultPending = true
+      showCoverResult()
+    }
+  }
+}
+
 $('addForm').onsubmit = async event => {
   event.preventDefault()
   const path = $('pathInput').value.trim()
   if (!path) {
     $('pathInput').focus()
-    toast('请先填写文件夹路径', true)
+    toast(t('enterFolder'), true)
     return
   }
   $('btnAdd').disabled = true
@@ -213,7 +406,7 @@ $('addForm').onsubmit = async event => {
     $('pathInput').value = ''
     $('addDialog').close()
     render(result)
-    toast('已添加，后台扫描中')
+    toast(t('folderAdded'))
   } catch (error) { toast(error.message, true) }
   finally { $('btnAdd').disabled = false }
 }
@@ -230,14 +423,14 @@ $('btnBrowse').onclick = async () => {
 
 $('btnRescan').onclick = act(async () => {
   const result = await api('rescan')
-  toast('已开始重新扫描')
+  toast(t('rescanStarted'))
   return result
 })
 $('portForm').onsubmit = event => {
   event.preventDefault()
   act(async () => {
     const result = await api('port', { port: $('portInput').valueAsNumber })
-    toast('端口已应用')
+    toast(t('portApplied'))
     return result
   })()
 }
@@ -249,9 +442,17 @@ $('chkAuto').onchange = async event => {
   if (state) input.checked = state.autoStart
 }
 
+$('languageSelect').onchange = async event => {
+  const select = event.target
+  select.disabled = true
+  await act(() => api('language', { language: select.value }))()
+  select.disabled = false
+  select.value = consoleLanguages[localeIndex]
+}
+
 $('btnCheckUpdate').onclick = async () => {
   $('btnCheckUpdate').disabled = true
-  text($('updateText'), '正在从 GitHub 检查最新版本…')
+  text($('updateText'), t('updateChecking'))
   try { await api('update/check') }
   catch (error) { toast(error.message, true) }
   finally {
@@ -286,8 +487,12 @@ function openRemove(id) {
   const library = state?.libs.find(item => item.id === id)
   if (!library) return
   removeID = id
-  text($('removeDescription'), `将「${library.label}」从媒体库移除？磁盘中的文件会保留。`)
+  renderRemoveDescription(library)
   $('removeDialog').showModal()
+}
+
+function renderRemoveDescription(library) {
+  text($('removeDescription'), library ? t('confirmRemoval', { name: library.label }) : t('missingLibrary'))
 }
 
 $('libList').addEventListener('click', event => {
@@ -324,7 +529,7 @@ $('btnConfirmRemove').onclick = async () => {
     $('removeDialog').close()
     render(result)
     $('btnAddFolder').focus()
-    toast('已移除媒体库')
+    toast(t('libraryRemoved'))
   } catch (error) { toast(error.message, true) }
   finally { $('btnConfirmRemove').disabled = false }
 }

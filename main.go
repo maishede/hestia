@@ -40,6 +40,7 @@ type app struct {
 	home    string
 	dataDir string
 
+	applyMu        sync.Mutex
 	appliedEnabled map[string]bool
 	appliedPort    int
 	appliedListen  string
@@ -114,7 +115,11 @@ func (a *app) shutdown() {
 }
 
 // ---- 配置统一应用器：GUI 修改与手改 config.json 走同一生效路径 ----
-func (a *app) apply(c config.Config) {
+func (a *app) apply(_ config.Config) {
+	a.applyMu.Lock()
+	defer a.applyMu.Unlock()
+	// Several config updates can arrive concurrently. Apply the most recent snapshot.
+	c := a.cfgM.Get()
 	want := map[string]config.Library{}
 	for _, l := range c.Libraries {
 		if l.Path == "" {

@@ -76,7 +76,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
-	res := s.store.Search(qStr(r, "q"), qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
+	res := s.store.SearchByActor(qStr(r, "q"), qStr(r, "actor"), qInt(r, "page", 1), qInt(r, "size", 20), qStr(r, "sort"), qStr(r, "order"))
 	writeJSON(w, http.StatusOK, res)
 }
 

@@ -26,10 +26,14 @@ func (s *Store) Actors() []ActorSummary {
 		actors = append(actors, ActorSummary{Name: name, Count: len(ids)})
 	}
 	s.mu.RUnlock()
+	sortActors(actors)
+	return actors
+}
+
+func sortActors(actors []ActorSummary) {
 	slices.SortFunc(actors, func(a, b ActorSummary) int {
 		return compareSort(cmp.Compare(a.Count, b.Count), "desc", a.Name, b.Name, a.Name, b.Name)
 	})
-	return actors
 }
 
 func (s *Store) ActorVideos(actor string, page, size int, sortKey, order string) MediaPage {

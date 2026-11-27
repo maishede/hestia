@@ -90,6 +90,7 @@ var (
 	trayIconData   notifyIconDataW
 	trayIconLoaded bool
 	balloonShown   bool
+	trayCopy       func() guiCopy
 )
 
 func t16(s string) uintptr {
@@ -132,10 +133,12 @@ func singleInstanceTaken() bool {
 	if errno, ok := err.(syscall.Errno); ok && errno == 183 { // ERROR_ALREADY_EXISTS
 		// 唤醒已有实例的主窗口（含托盘中的隐藏窗口）；短暂重试覆盖首实例还在初始化的窗口期
 		for i := 0; i < 20; i++ {
-			h, _, _ := pTFindWindowW.Call(0, t16("Hestia 控制台"))
-			if h != 0 {
-				pTPostMessageW.Call(h, wmShowFromSecond, 0, 0)
-				break
+			for _, copy := range guiLocales {
+				h, _, _ := pTFindWindowW.Call(0, t16(copy.title))
+				if h != 0 {
+					pTPostMessageW.Call(h, wmShowFromSecond, 0, 0)
+					return true
+				}
 			}
 			timeSleep(50)
 		}
@@ -145,8 +148,9 @@ func singleInstanceTaken() bool {
 }
 
 // setupWindowChrome 子类化窗口（拦截 X）、注册托盘图标、设置图标。
-func setupWindowChrome(hwnd syscall.Handle) {
+func setupWindowChrome(hwnd syscall.Handle, currentCopy func() guiCopy) {
 	guiHwnd = hwnd
+	trayCopy = currentCopy
 
 	loadAppIcons()
 	pTSendMessageW.Call(uintptr(hwnd), wmSetIconT, 1, uintptr(appIconLarge)) // ICON_BIG
@@ -161,7 +165,7 @@ func setupWindowChrome(hwnd syscall.Handle) {
 		UCallbackMessage: wmTrayCallback,
 		HIcon:            icon,
 	}
-	utf16Buf(trayIconData.SzTip[:], "Hestia 家庭影视服务器（左键打开，右键退出）")
+	utf16Buf(trayIconData.SzTip[:], trayCopy().trayTip)
 	if shellNotify(nimAdd, &trayIconData) {
 		trayIconLoaded = true
 	}
@@ -169,6 +173,16 @@ func setupWindowChrome(hwnd syscall.Handle) {
 	newWndProcPtr = syscall.NewCallback(trayWndProc)
 	r, _, _ := pTSetWindowLongPtrW.Call(uintptr(hwnd), uintptr(^uintptr(3)), newWndProcPtr)
 	oldWndProc = r
+}
+
+func setTrayToolTip(tip string) {
+	trayMu.Lock()
+	defer trayMu.Unlock()
+	if trayIconLoaded {
+		clear(trayIconData.SzTip[:])
+		utf16Buf(trayIconData.SzTip[:], tip)
+		shellNotify(nimModify, &trayIconData)
+	}
 }
 
 func removeTray() {
@@ -192,8 +206,9 @@ func hideGuiWindow() {
 		d := trayIconData
 		d.UFlags = nifInfo
 		d.DwInfoFlags = 1 // NIIF_INFO
-		utf16Buf(d.SzInfoTitle[:], "Hestia 仍在运行")
-		utf16Buf(d.SzInfo[:], "服务已最小化到托盘继续运行；左键图标恢复窗口，右键可退出。")
+		copy := trayCopy()
+		utf16Buf(d.SzInfoTitle[:], copy.trayBalloonTitle)
+		utf16Buf(d.SzInfo[:], copy.trayBalloonBody)
 		shellNotify(nimModify, &d)
 	}
 }
@@ -201,9 +216,9 @@ func hideGuiWindow() {
 func trayWndProc(hwnd syscall.Handle, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
 	case wmCloseTray: // 点 X：弹框选择「最小化到托盘」或「退出」
+		copy := trayCopy()
 		ret, _, _ := pTMessageBoxW.Call(uintptr(hwnd),
-			t16("缩到托盘继续运行？\n选择「否」将退出并停止服务。"),
-			t16("关闭 Hestia"), 0x24) // MB_YESNO | MB_ICONQUESTION
+			t16(copy.closeQuestion), t16(copy.closeTitle), 0x24) // MB_YESNO | MB_ICONQUESTION
 		switch ret {
 		case 6: // IDYES → 托盘
 			hideGuiWindow()
@@ -235,8 +250,9 @@ func trayMenu() {
 		return
 	}
 	defer pTDestroyMenu.Call(menu)
-	pTAppendMenuW.Call(menu, 0, 1001, t16("显示主窗口"))
-	pTAppendMenuW.Call(menu, 0, 1002, t16("退出"))
+	copy := trayCopy()
+	pTAppendMenuW.Call(menu, 0, 1001, t16(copy.showWindow))
+	pTAppendMenuW.Call(menu, 0, 1002, t16(copy.exit))
 	var pt pointT
 	pTGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	pTSetForegroundWnd.Call(uintptr(guiHwnd))

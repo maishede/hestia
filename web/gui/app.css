@@ -25,10 +25,10 @@ body {
   background: var(--canvas);
   color: var(--ink);
 }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: .55; }
-:where(button, input, dialog):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+:where(button, input, select, dialog):focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
 ::selection { background: #cdd9ff; color: var(--ink); }
 p, h1, h2, h3 { margin: 0; }
 .muted { color: var(--muted); font-size: 13px; }
@@ -91,7 +91,8 @@ p, h1, h2, h3 { margin: 0; }
 .workspace-head h1 { font-size: 29px; line-height: 1.2; font-weight: 720; letter-spacing: -.04em; }
 .workspace-head .primary { min-height: 37px; padding-inline: 12px; }
 .summary { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-.rescan { justify-self: end; color: var(--muted); margin-inline-end: -5px; }
+.library-actions { display: flex; justify-content: end; gap: 2px; }
+.library-actions .btn { color: var(--muted); }
 .rescan.busy .icon { animation: spin 1.6s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -167,6 +168,7 @@ dialog::backdrop { background: #14243c59; }
 .modal-actions { display: flex; gap: 7px; justify-content: flex-end; margin-top: 16px; }
 .input-row { display: flex; align-items: center; gap: 8px; }
 input:not([type="checkbox"]) { min-width: 0; min-height: 35px; width: 100%; padding: 6px 9px; border: 1px solid var(--control); border-radius: 7px; color: var(--ink); background: var(--canvas); }
+select { min-height: 35px; max-width: 60%; padding: 5px 8px; border: 1px solid var(--control); border-radius: 7px; color: var(--ink); background: var(--surface); }
 input::placeholder { color: var(--muted); }
 .input-row .port { width: 96px; }
 .row-actions { display: none; position: fixed; inset: auto; margin: 0; padding: 4px; border-radius: 8px; }
@@ -182,6 +184,17 @@ input::placeholder { color: var(--muted); }
 .setting-heading { display: flex; align-items: baseline; gap: 8px; }
 .version { color: var(--blue-dark); font-size: 12px; }
 progress { width: 100%; margin-top: 7px; accent-color: var(--blue); }
+.cover-progress-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.cover-progress-heading:has(> :not([hidden])) { margin-top: 4px; }
+#coverProcessed, .cover-counts, #btnGenerateCovers { font-variant-numeric: tabular-nums; }
+#coverProcessed, .cover-counts > span { white-space: nowrap; }
+.cover-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; }
+.cover-issues { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 9px; }
+.cover-issues summary { cursor: pointer; color: var(--blue-dark); font-size: 13px; }
+.cover-issues ul { max-height: 150px; overflow: auto; margin: 7px 0 0; padding: 0; list-style: none; }
+.cover-issues li { padding: 5px 4px; overflow-wrap: anywhere; }
+.cover-issues li + li { border-top: 1px solid var(--line); }
+.cover-issues li > span { display: block; }
 .connection-row { display: flex; gap: 7px; align-items: center; justify-content: space-between; padding-block: 8px; border-bottom: 1px solid var(--line); }
 .connection-row p { color: var(--muted); font-size: 12px; }
 .connection-row code { overflow-wrap: anywhere; }
@@ -211,6 +224,7 @@ progress { width: 100%; margin-top: 7px; accent-color: var(--blue); }
   .library-table .contents { width: 0; visibility: collapse; padding: 0; }
   .workspace-head { gap: 4px; }
   .workspace-head h1 { font-size: 25px; }
+  .library-actions .btn { padding-inline: 5px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

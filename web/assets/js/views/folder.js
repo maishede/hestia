@@ -1,4 +1,5 @@
 // 文件夹页：子文件夹和媒体分别分页
+import { t } from '../i18n.js'
 import { api } from '../api.js'
 import { mountFolderDelete } from '../delete-dialog.js'
 import { folderCard, mediaCard } from '../cards.js'
@@ -6,16 +7,16 @@ import { returnHomeHref, withHome } from '../navigation.js'
 import { pageSize, pager } from '../pagination.js'
 import { skeleton, emptyHTML, esc, sortBarEl, getSort, setSort } from '../util.js'
 
-export function FolderView(app, id) {
+export function FolderView(app, id, viewState) {
   const sort = getSort()
   const url = `/api/folders/${id}`
-  let folderPage = 1
-  let mediaPage = 1
+  let folderPage = viewState?.folderPage ?? 1
+  let mediaPage = viewState?.mediaPage ?? 1
   let request
 
   app.innerHTML = `<div class="page">
     <div class="breadcrumb">
-      <a class="btn ghost sm" href="${esc(returnHomeHref())}">返回主页</a>
+      <a class="btn ghost sm" href="${esc(returnHomeHref())}">${esc(t('backHome'))}</a>
       <span id="crumb" class="breadcrumb-trail"></span>
     </div>
     <div class="page-head">
@@ -23,15 +24,15 @@ export function FolderView(app, id) {
       <span class="count" id="count"></span>
       <span class="spacer"></span>
       <span id="sortSlot"></span>
-      <button type="button" class="btn ghost sm danger" id="delete-media" hidden>删除媒体</button>
+      <button type="button" class="btn ghost sm danger" id="delete-media" hidden>${esc(t('deleteMedia'))}</button>
     </div>
     <div id="error"></div>
     <section id="foldersWrap" hidden>
-      <h3 class="section-title">子文件夹</h3>
+      <h3 class="section-title">${esc(t('subfolders'))}</h3>
       <div id="fgrid" class="grid"></div>
     </section>
     <section id="mediaWrap">
-      <h3 class="section-title">媒体</h3>
+      <h3 class="section-title">${esc(t('media'))}</h3>
       <div id="grid" class="grid">${skeleton(8, true)}</div>
     </section>
   </div>`
@@ -42,8 +43,8 @@ export function FolderView(app, id) {
   const folders = $('#fgrid')
   const deleteButton = $('#delete-media')
   const disposeDelete = mountFolderDelete(root, deleteButton, id)
-  const folderPager = pager(page => { folderPage = page; load() }, '子文件夹分页')
-  const mediaPager = pager(page => { mediaPage = page; load() }, '媒体分页')
+  const folderPager = pager(page => { folderPage = page; load() }, t('folderPagination'))
+  const mediaPager = pager(page => { mediaPage = page; load() }, t('mediaPagination'))
   folders.after(folderPager.nav)
   grid.after(mediaPager.nav)
 
@@ -70,7 +71,7 @@ export function FolderView(app, id) {
         return `<a class="${current ? 'cur' : ''}" href="${esc(href)}">${esc(crumb.name)}</a>`
       }).join('<span class="sep">/</span>')
       $('#fname').textContent = breadcrumb.at(-1)?.name || ''
-      $('#count').textContent = `${data.foldersTotal} 个子文件夹 · ${media.total} 个媒体`
+      $('#count').textContent = t('folderBreakdown', { folders: data.foldersTotal, media: media.total })
       deleteButton.hidden = !data.canDelete
       $('#foldersWrap').hidden = !data.foldersTotal
       folders.innerHTML = data.folders.map(folder => folderCard(folder)).join('')
@@ -78,19 +79,19 @@ export function FolderView(app, id) {
       $('#mediaWrap').hidden = !media.total && data.foldersTotal > 0
       grid.classList.toggle('list-empty', !media.total)
       grid.innerHTML = media.items.length ? media.items.map(item => mediaCard(item)).join('')
-        : emptyHTML('这个文件夹是空的', '放入媒体后可在控制台重新扫描')
+        : emptyHTML(t('emptyFolder'), t('rescanFolderHint'))
       mediaPager.update(media.page, media.total, media.size)
     } catch (error) {
       if (controller.signal.aborted) return
-      $('#error').innerHTML = emptyHTML('加载失败', error.message)
+      $('#error').innerHTML = emptyHTML(t('loadFailed'), error.message)
       $('#mediaWrap').hidden = true
     }
   }
 
   $('#sortSlot').appendChild(sortBarEl(sort, [
-    { key: 'name', label: '名称' },
-    { key: 'mtime', label: '修改日期' },
-    { key: 'size', label: '大小' },
+    { key: 'name', label: t('sortName') },
+    { key: 'mtime', label: t('sortDate') },
+    { key: 'size', label: t('sortSize') },
   ], v => {
     setSort(v)
     Object.assign(sort, v)
@@ -99,6 +100,7 @@ export function FolderView(app, id) {
   }))
   load()
   return {
+    saveViewState() { return { folderPage, mediaPage } },
     destroy() {
       request?.abort()
       disposeDelete()

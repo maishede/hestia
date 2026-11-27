@@ -1,6 +1,7 @@
 import { api } from './api.js'
 import { withHome } from './navigation.js'
-import { toast } from './util.js'
+import { serverMessage, t } from './i18n.js'
+import { esc, toast } from './util.js'
 
 // The confirmation always names the containing folder and the entire scope.
 export function mountFolderDelete(parent, button, folderID, beforeDelete = () => {}, codeRequired = false) {
@@ -9,24 +10,24 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
   dialog.className = 'delete-dialog'
   dialog.setAttribute('aria-labelledby', 'delete-title')
   dialog.innerHTML = `<form>
-    <h2 id="delete-title">删除文件夹中的媒体</h2>
+    <h2 id="delete-title">${esc(t('deleteTitle'))}</h2>
     <div id="delete-auth" hidden>
-      <p>在电脑端打开任一媒体的删除窗口，点击「查看手机授权码」。</p>
-      <label for="delete-code">删除授权码</label>
+      <p>${esc(t('deleteGetCode'))}</p>
+      <label for="delete-code">${esc(t('deleteCode'))}</label>
       <input id="delete-code" class="ipt" type="password" maxlength="32" autocomplete="off" autocapitalize="off">
     </div>
     <p id="delete-summary"></p>
     <p id="delete-subfolders" class="delete-warning" hidden></p>
     <div id="delete-fields" hidden>
-      <label for="delete-reason">删除原因</label>
+      <label for="delete-reason">${esc(t('deleteReason'))}</label>
       <input id="delete-reason" class="ipt" maxlength="80" autocomplete="off">
     </div>
     <p id="delete-preview-name" class="delete-preview-name"></p>
     <p id="delete-error" class="delete-warning" role="alert" hidden></p>
-    ${codeRequired ? '' : '<button type="button" class="btn ghost sm" id="delete-show-code">查看手机授权码</button><p id="delete-code-display" hidden></p>'}
+    ${codeRequired ? '' : `<button type="button" class="btn ghost sm" id="delete-show-code">${esc(t('deleteShowCode'))}</button><p id="delete-code-display" hidden></p>`}
     <div class="delete-actions">
-      <button class="btn ghost" type="button" id="delete-cancel">取消</button>
-      <button class="btn danger-fill" type="submit" id="delete-submit">确认删除</button>
+      <button class="btn ghost" type="button" id="delete-cancel">${esc(t('cancel'))}</button>
+      <button class="btn danger-fill" type="submit" id="delete-submit">${esc(t('deleteConfirm'))}</button>
     </div>
   </form>`
   parent.appendChild(dialog)
@@ -53,7 +54,7 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
 
   function updateName() {
     const suffix = reason.value.trim()
-    $('#delete-preview-name').textContent = suffix ? `改名为「${preview.name}-${suffix}」` : ''
+    $('#delete-preview-name').textContent = suffix ? t('deleteRenameTo', { name: `${preview.name}-${suffix}` }) : ''
   }
   function showError(message) {
     const error = $('#delete-error')
@@ -73,17 +74,17 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
       preview = data
       auth.hidden = true
       $('#delete-fields').hidden = false
-      submit.textContent = '确认删除'
+      submit.textContent = t('deleteConfirm')
       reason.value = ''
       reason.disabled = submit.disabled = !preview.files
       updateName()
       showError('')
       $('#delete-summary').textContent = preview.files
-        ? `将永久删除「${preview.name}」中直属的 ${preview.files} 个视频、图片或字幕，并停止正在读取该目录的播放。其他文件会保留。`
-        : `「${preview.name}」中没有可删除的直属媒体。`
+        ? t('deleteSummary', { name: preview.name, count: preview.files })
+        : t('deleteNone', { name: preview.name })
       const warning = $('#delete-subfolders')
       warning.hidden = !preview.subfolders
-      warning.textContent = `发现 ${preview.subfolders} 个子文件夹或链接，请手动检查。里面的内容会保留。`
+      warning.textContent = t('deleteSubfolders', { count: preview.subfolders })
       if (!codeRequired) (preview.files ? reason : cancel).focus()
     } catch (error) {
       if (!request.signal.aborted) showError(error.message)
@@ -104,7 +105,7 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
     if (showCode) $('#delete-code-display').hidden = true
     showError('')
     submit.disabled = false
-    submit.textContent = codeRequired ? '查看删除范围' : '确认删除'
+    submit.textContent = codeRequired ? t('deletePreview') : t('deleteConfirm')
     dialog.showModal()
     if (!codeRequired) loadPreview()
   }
@@ -119,7 +120,7 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
     if (submit.disabled) return
     if (!preview && codeRequired) {
       if (!/^[0-9a-f]{32}$/.test(code.value.trim())) {
-        showError('请输入电脑端显示的 32 位授权码')
+        showError(t('deleteCodeRequired'))
         return
       }
       await loadPreview()
@@ -128,12 +129,12 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
     if (!preview?.files) return
     const value = reason.value.trim()
     if (!value) {
-      showError('请输入删除原因')
+      showError(t('deleteReasonRequired'))
       reason.focus()
       return
     }
     reason.disabled = submit.disabled = cancel.disabled = true
-    submit.textContent = '正在删除…'
+    submit.textContent = t('deleting')
     showError('')
     try {
       beforeDelete()
@@ -144,14 +145,14 @@ export function mountFolderDelete(parent, button, folderID, beforeDelete = () =>
       })
       if (disposed) return
       dialog.close()
-      toast(result.warning || `已删除 ${result.files} 个媒体文件，文件夹已改名为「${result.name}」`,
+      toast(result.warning ? serverMessage(result.warning) : t('deleted', { count: result.files, name: result.name }),
         result.warning ? 'err' : 'info', result.warning ? 6500 : 3200)
       location.hash = withHome(`#/folder/${result.id}`)
     } catch (error) {
       if (!disposed) showError(error.message)
     } finally {
       reason.disabled = submit.disabled = cancel.disabled = false
-      submit.textContent = '确认删除'
+      submit.textContent = t('deleteConfirm')
     }
   }
 

@@ -1,4 +1,5 @@
 // 播放器页：手势 + 倍速 + 断点续播 + 转码兜底
+import { language, t } from '../i18n.js'
 import { api, post } from '../api.js'
 import { mountFolderDelete } from '../delete-dialog.js'
 import { returnHomeHref, withHome } from '../navigation.js'
@@ -7,14 +8,29 @@ import { icon, fmtDur, fmtSize, toast, clamp, esc } from '../util.js'
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
+// The bundled xgplayer includes Chinese and English. Add the Japanese labels used by its controls.
+const xgJapanese = {
+  LANG: 'ja',
+  TEXT: {
+    PLAY_TIPS: '再生', PAUSE_TIPS: '一時停止', PLAYNEXT_TIPS: '次へ',
+    FULLSCREEN_TIPS: '全画面表示', EXITFULLSCREEN_TIPS: '全画面表示を終了',
+    CSSFULLSCREEN_TIPS: 'ブラウザー内で全画面表示',
+    EXITCSSFULLSCREEN_TIPS: 'ブラウザー内の全画面表示を終了',
+    PIP: 'ピクチャーインピクチャー', MINISCREEN: 'ミニプレーヤー',
+    MINI_DRAG: '押したままドラッグ', REPLAY: 'もう一度再生',
+    TEXTTRACK: '字幕', TEXTTRACK_OFF: 'オフ',
+    RELOAD_TIPS: '再読み込み', REFRESH: '更新', REFRESH_TIPS: 'もう一度お試しください',
+  },
+}
+
 let xgLoader = null
 function ensurePlayer() {
   if (window.Player) return Promise.resolve(window.Player)
   if (!xgLoader) xgLoader = new Promise((resolve, reject) => {
     const script = document.createElement('script')
     script.src = '/assets/js/vendor/xgplayer.min.js'
-    script.onload = () => window.Player ? resolve(window.Player) : reject(new Error('播放器加载失败'))
-    script.onerror = () => reject(new Error('播放器加载失败'))
+    script.onload = () => window.Player ? resolve(window.Player) : reject(new Error(t('playerFailed')))
+    script.onerror = () => reject(new Error(t('playerFailed')))
     document.head.appendChild(script)
   }).catch(error => { xgLoader = null; throw error })
   return xgLoader
@@ -26,28 +42,28 @@ function ensureHls() {
   if (!hlsLoader) hlsLoader = new Promise((resolve, reject) => {
     const script = document.createElement('script')
     script.src = '/assets/js/vendor/hls.min.js'
-    script.onload = () => window.Hls ? resolve(window.Hls) : reject(new Error('hls.js 加载失败'))
-    script.onerror = () => { script.remove(); reject(new Error('hls.js 加载失败')) }
+    script.onload = () => window.Hls ? resolve(window.Hls) : reject(new Error(t('hlsFailed')))
+    script.onerror = () => { script.remove(); reject(new Error(t('hlsFailed'))) }
     document.head.appendChild(script)
   }).catch(error => { hlsLoader = null; throw error })
   return hlsLoader
 }
 
 export async function PlayerView(app, id, isCurrent = () => true) {
-  app.innerHTML = '<div class="empty-state"><p>正在加载视频…</p></div>'
+  app.innerHTML = `<div class="empty-state"><p>${esc(t('videoLoading'))}</p></div>`
   const [meta, XGPlayer] = await Promise.all([
-    api(`/api/media/${id}`).catch(e => { throw new Error(e.message || '视频不存在或已被移除') }),
+    api(`/api/media/${id}`).catch(e => { throw new Error(e.message || t('videoUnavailable')) }),
     ensurePlayer(),
   ])
   if (!isCurrent()) return null
-  if (!meta || !meta.stream) throw new Error('视频信息加载失败，请返回重试')
+  if (!meta || !meta.stream) throw new Error(t('videoMetadataFailed'))
 
   // 字幕轨道清单（外挂 + 内嵌文本轨）
   const subExt = (meta.subtitles && meta.subtitles.external) || []
   const subEmb = (meta.subtitles && meta.subtitles.embedded) || []
   const ccTracks = [
     ...subExt.map(s => ({ kind: 'ext', id: s.id, label: s.name, el: null })),
-    ...subEmb.map(s => ({ kind: 'emb', index: s.index, label: `${s.title || s.lang || '轨道 ' + (s.index)}` , el: null })),
+    ...subEmb.map(s => ({ kind: 'emb', index: s.index, label: s.title || s.lang || t('track', { index: s.index }), el: null })),
   ]
   let activeCC = subExt.length ? 0 : -1
 
@@ -65,9 +81,9 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     <div id="gesture"></div>
     <div class="hud" id="hud"><span id="hud-ico"></span><span class="hud-text" id="hud-text"></span><div class="hud-bar" id="hud-bar" style="display:none"><i id="hud-bar-i"></i></div></div>
     <div class="p-top">
-      <button class="pbtn" id="btn-back" title="返回" aria-label="返回">${icon('back', 21)}</button>
+      <button class="pbtn" id="btn-back" title="${esc(t('back'))}" aria-label="${esc(t('back'))}">${icon('back', 21)}</button>
       <div class="p-title">${esc(meta.name)}${meta.folderName ? ` <span style="opacity:.55;font-weight:400">· ${esc(meta.folderName)}</span>` : ''}</div>
-      <span class="tc-chip" id="tc-chip" hidden>转码</span>
+      <span class="tc-chip" id="tc-chip" hidden>${esc(t('transcode'))}</span>
     </div>
     <div class="p-bottom">
       <div class="progress-row">
@@ -75,7 +91,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
         <div class="track" id="track">
           <div class="rail"><div class="buf" id="buf"></div><div class="played" id="played"></div></div>
           <div class="knob" id="knob" style="left:0%"></div>
-          <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="进度">
+          <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="${esc(t('progress'))}">
         </div>
         <span class="time" id="t-dur">--:--</span>
       </div>
@@ -83,14 +99,14 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     <div class="sub-menu" id="cc-menu" hidden></div>
     <div class="resume-tip" id="resume-tip" hidden>
       <span id="resume-text"></span>
-      <button class="btn-sm" id="resume-go">继续播放</button>
-      <button class="btn-sm ghost" id="resume-no">从头看</button>
+      <button class="btn-sm" id="resume-go">${esc(t('continuePlaying'))}</button>
+      <button class="btn-sm ghost" id="resume-no">${esc(t('startOver'))}</button>
     </div>
-    <div class="center-note spinner-note"><div class="spinner"></div><div id="spin-text">加载中…</div></div>
+    <div class="center-note spinner-note"><div class="spinner"></div><div id="spin-text">${esc(t('loading'))}</div></div>
     <div class="center-note error-note">
       ${icon('x', 40)}
-      <div id="err-text">播放失败</div>
-      <button class="btn" id="err-retry">用转码模式重试</button>
+      <div id="err-text">${esc(t('playbackFailed'))}</div>
+      <button class="btn" id="err-retry">${esc(t('retryTranscode'))}</button>
     </div>`
   const detail = document.createElement('section')
   detail.className = 'media-detail'
@@ -99,13 +115,13 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   const properties = [fmtDur(meta.duration), fmtSize(meta.size)].filter(Boolean).join(' · ')
   detail.innerHTML = `
     <div class="detail-header">
-      <a class="btn ghost sm" href="${esc(home)}">返回主页</a>
-      ${folder ? `<a class="btn ghost sm" href="${esc(folder)}">返回文件夹</a>` : ''}
+      <a class="btn ghost sm" href="${esc(home)}">${esc(t('backHome'))}</a>
+      ${folder ? `<a class="btn ghost sm" href="${esc(folder)}">${esc(t('backFolder'))}</a>` : ''}
       <div class="detail-title">
         <h1>${esc(meta.name)}</h1>
         <p>${esc([meta.folderName, properties].filter(Boolean).join(' · '))}</p>
       </div>
-      ${meta.canDelete || meta.deleteCodeRequired ? '<button type="button" class="btn danger sm" id="detail-delete">删除所在文件夹媒体</button>' : ''}
+      ${meta.canDelete || meta.deleteCodeRequired ? `<button type="button" class="btn danger sm" id="detail-delete">${esc(t('deleteFolderMedia'))}</button>` : ''}
     </div>`
   detail.appendChild(root)
   app.replaceChildren(detail)
@@ -115,6 +131,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   const player = new XGPlayer({
     el: $('#xg-player'), url: meta.stream, width: '100%', height: '100%',
     videoInit: false, autoplay: false, playsinline: true,
+    lang: language.toLowerCase(), i18n: [xgJapanese],
     ignores: ['mobile', 'pc', 'keyboard', 'progress', 'time', 'start', 'loading', 'error', 'replay', 'miniprogress', ...(isIOS ? ['volume'] : [])],
     controls: { autoHide: false, initShow: true },
     playbackRate: { list: [2, 1.5, 1, 0.5], toggleMode: 'click' },
@@ -128,9 +145,9 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   await player.start()
   if (!isCurrent()) { player.destroy(); detail.remove(); return null }
   const leftGrid = $('xg-left-grid'), rightGrid = $('xg-right-grid')
-  if (meta.prev) leftGrid.insertAdjacentHTML('afterbegin', `<button class="pbtn" id="btn-prev" title="上一个">${icon('back', 17)}</button>`)
-  if (meta.next) leftGrid.insertAdjacentHTML('beforeend', `<button class="pbtn" id="btn-next" title="下一个">${icon('fwd', 17)}</button>`)
-  rightGrid.insertAdjacentHTML('beforeend', `<button class="pbtn ${ccTracks.length ? '' : 'hide'}" id="btn-cc" title="字幕">${icon('cc', 20)}</button>`)
+  if (meta.prev) leftGrid.insertAdjacentHTML('afterbegin', `<button class="pbtn" id="btn-prev" title="${esc(t('previousVideo'))}" aria-label="${esc(t('previousVideo'))}">${icon('back', 17)}</button>`)
+  if (meta.next) leftGrid.insertAdjacentHTML('beforeend', `<button class="pbtn" id="btn-next" title="${esc(t('nextVideo'))}" aria-label="${esc(t('nextVideo'))}">${icon('fwd', 17)}</button>`)
+  rightGrid.insertAdjacentHTML('beforeend', `<button class="pbtn ${ccTracks.length ? '' : 'hide'}" id="btn-cc" title="${esc(t('subtitles'))}" aria-label="${esc(t('subtitles'))}">${icon('cc', 20)}</button>`)
   const vid = player.media, gesture = $('#gesture'), hud = $('#hud')
   const hudIco = $('#hud-ico'), hudText = $('#hud-text'), hudBar = $('#hud-bar'), hudBarI = $('#hud-bar-i')
   const seek = $('#seek'), playedEl = $('#played'), bufEl = $('#buf'), knob = $('#knob')
@@ -232,7 +249,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
 
   async function startHLS(startAt, shouldPlay = true, recoverMissingSession = true) {
     if (playbackStopped || destroyed) return
-    if (!meta.playback.transcodeAvailable) throw new Error('服务端未找到 ffmpeg，无法转码（可将 ffmpeg 放到程序同目录或加入 PATH）')
+    if (!meta.playback.transcodeAvailable) throw new Error(t('ffmpegMissing'))
     cancelHlsSeek()
     const generation = ++sourceGeneration
     const target = Math.max(0, startAt || 0)
@@ -245,9 +262,9 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     if (destroyed) return
     root.classList.remove('error')
     root.classList.add('loading')
-    spinText.textContent = '转码启动中…'
+    spinText.textContent = t('transcodeStarting')
     chip.hidden = false
-    chip.textContent = '转码中…'
+    chip.textContent = t('transcoding')
     let r
     let reservedId = null
     let Hls = null
@@ -261,10 +278,10 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       }
       if (destroyed || generation !== sourceGeneration) return
       useMSE = Hls && Hls.isSupported()
-      if (!useMSE && !nativeHls) throw new Error('浏览器不支持 HLS 播放')
+      if (!useMSE && !nativeHls) throw new Error(t('hlsUnsupported'))
       const reservation = await post(`/api/media/${id}/transcode/reserve`)
       reservedId = reservation.sessionId
-      if (!reservedId) throw new Error('转码会话预留失败')
+      if (!reservedId) throw new Error(t('transcodeReservationFailed'))
       if (destroyed || generation !== sourceGeneration) { deleteSession(reservedId); return }
       // Record the ID before starting FFmpeg, so pagehide can cancel either
       // the reservation or the session even when the start response is pending.
@@ -272,7 +289,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       r = await post(`/api/media/${id}/transcode`, { start: target, sessionId: reservedId })
       if (r.sessionId !== reservedId) {
         deleteSession(r.sessionId)
-        throw new Error('转码会话标识不匹配')
+        throw new Error(t('transcodeMismatch'))
       }
     } catch (error) {
       if (session === reservedId) stopSession()
@@ -300,7 +317,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
             return
           }
           instance.stopLoad()
-          failTranscode(missing ? '转码会话已结束，请重试' : undefined)
+          failTranscode(missing ? t('transcodeEnded') : undefined)
         })
         instance.loadSource(r.url)
         instance.attachMedia(vid)
@@ -346,7 +363,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     errText.textContent = msg
   }
 
-  function failTranscode(message = '转码播放失败，请重试') {
+  function failTranscode(message = t('transcodeFailed')) {
     stopSession()
     vid.pause()
     showError(message)
@@ -457,7 +474,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     const total = totalDur()
     if (savedT > 30 && total && total - savedT > 30) {
       resumeShown = true
-      resumeText.textContent = `上次看到 ${fmtDur(savedT)}`
+      resumeText.textContent = t('resumeFrom', { time: fmtDur(savedT) })
       resumeTip.hidden = false
       showControls()
       setTimeout(() => { resumeTip.hidden = true }, 10000)
@@ -496,9 +513,9 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   vid.addEventListener('waiting', () => {
     if (root.classList.contains('error')) return
     root.classList.add('loading')
-    spinText.textContent = '缓冲中…'
+    spinText.textContent = t('buffering')
   })
-  vid.addEventListener('playing', () => { root.classList.remove('loading', 'error'); chip.textContent = '转码'; showControls() })
+  vid.addEventListener('playing', () => { root.classList.remove('loading', 'error'); chip.textContent = t('transcode'); showControls() })
   vid.addEventListener('canplay', () => root.classList.remove('loading'))
   vid.addEventListener('play', () => {
     if (!sourceChanging && !pageHidden && !vid.paused) {
@@ -519,7 +536,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   vid.addEventListener('ended', () => {
     localStorage.removeItem(pKey)
     fetch(`/api/progress/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {})
-    if (meta.next) toast(`已播完 · 下一个：《${meta.next.name}》`)
+    if (meta.next) toast(t('finishedNext', { name: meta.next.name }))
   })
   vid.addEventListener('error', () => {
     if (!vid.error || sourceChanging || destroyed || playbackStopped || pageHidden) return
@@ -528,10 +545,10 @@ export async function PlayerView(app, id, isCurrent = () => true) {
       if (nativeSource && !pendingHlsSeek) handleNativeHlsError()
       return
     }
-    if (!meta.playback.transcodeAvailable) { showError('该格式浏览器无法播放，且服务端缺少 ffmpeg'); return }
-    if (failoverTried) { showError('播放失败：浏览器无法解码该文件'); return }
+    if (!meta.playback.transcodeAvailable) { showError(t('cannotPlayNoFfmpeg')); return }
+    if (failoverTried) { showError(t('cannotDecode')); return }
     failoverTried = true
-    toast('直连播放失败，已切换转码模式…')
+    toast(t('transcodeFallback'))
     startHLS(curTime() || 0).catch(e => showError(e.message))
   })
 
@@ -616,10 +633,10 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   }
   function renderCCMenu() {
     if (!ccTracks.length) return
-    const items = [`<button data-i="-1" class="${activeCC < 0 ? 'active' : ''}">关闭字幕</button>`]
+    const items = [`<button data-i="-1" class="${activeCC < 0 ? 'active' : ''}">${esc(t('subtitlesOff'))}</button>`]
       .concat(ccTracks.map((t, i) => `<button data-i="${i}" class="${i === activeCC ? 'active' : ''}">${esc(t.label)}</button>`))
       .join('')
-    ccMenu.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:2px 10px 8px">字幕</div>${items}`
+    ccMenu.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:2px 10px 8px">${esc(t('subtitles'))}</div>${items}`
   }
   renderCCMenu()
   if (ccTracks.length) {
@@ -643,7 +660,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
     vid.addEventListener('volumechange', () => localStorage.setItem('hestia.volume', String(vid.volume)))
   } else if (!localStorage.getItem('hestia.ioshint')) {
     localStorage.setItem('hestia.ioshint', '1')
-    setTimeout(() => toast('iOS 上请用音量键调音量；右侧上下滑动可快进/倒退', 4200), 800)
+    setTimeout(() => toast(t('iosHint'), 4200), 800)
   }
 
   // ---------- 手势 ----------
@@ -663,7 +680,7 @@ export async function PlayerView(app, id, isCurrent = () => true) {
         ptr.lp = true
         lpPrevRate = vid.playbackRate
         vid.playbackRate = 2
-        showHUD('play', '2x 快进中', null)
+        showHUD('play', t('fastForward'), null)
       }, 500),
     }
   })
@@ -815,8 +832,8 @@ export async function PlayerView(app, id, isCurrent = () => true) {
   const disposeDelete = deleteButton && mountFolderDelete(detail, deleteButton, meta.folderId, () => {
     releasePlayback()
     root.classList.remove('loading')
-    showError('播放已停止')
-    $('#err-retry').textContent = '重新打开视频'
+    showError(t('playbackStopped'))
+    $('#err-retry').textContent = t('reopenVideo')
   }, meta.deleteCodeRequired)
 
   // ---------- 启动 ----------

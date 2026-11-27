@@ -1,19 +1,27 @@
 // API 请求封装
+import { serverMessage, t } from './i18n.js'
+
 export async function api(path, opts = {}) {
-  const res = await fetch(path, opts)
+  let res
+  try {
+    res = await fetch(path, opts)
+  } catch (error) {
+    if (error.name === 'AbortError') throw error
+    throw new Error(t('networkFailed'), { cause: error })
+  }
   if (!res.ok) {
-    let msg = `HTTP ${res.status}`
+    let msg = t('requestFailed', { status: res.status })
     try {
       const j = await res.json()
-      if (j && j.error) msg = j.error
+      if (j?.error) msg = serverMessage(j.error)
     } catch {}
     throw new Error(msg)
   }
   if (res.status === 204) return null
   const ct = res.headers.get('content-type') || ''
-  if (!ct.includes('json')) throw new Error('服务响应异常，请稍后重试')
+  if (!ct.includes('json')) throw new Error(t('responseInvalid'))
   const j = await res.json()
-  if (j === null || j === undefined) throw new Error('服务返回为空，请稍后重试')
+  if (j === null || j === undefined) throw new Error(t('responseEmpty'))
   return j
 }
 

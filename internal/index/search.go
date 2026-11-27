@@ -49,20 +49,22 @@ func digitCount(s string) int {
 }
 
 type SearchItem struct {
-	ID       string  `json:"id"`
-	Kind     string  `json:"kind"` // video | image
-	Name     string  `json:"name"`
-	Where    string  `json:"where"` // 所属文件夹面包屑（仅名称，不含物理路径）
-	Size     int64   `json:"size,omitempty"`
-	Duration float64 `json:"duration,omitempty"`
-	Mtime    int64   `json:"mtime,omitempty"`
+	ID        string  `json:"id"`
+	Kind      string  `json:"kind"` // video | image
+	Name      string  `json:"name"`
+	Where     string  `json:"where"` // 所属文件夹面包屑（仅名称，不含物理路径）
+	Size      int64   `json:"size,omitempty"`
+	Duration  float64 `json:"duration,omitempty"`
+	Mtime     int64   `json:"mtime,omitempty"`
+	CardCover string  `json:"cardCover,omitempty"`
 }
 
 type SearchResult struct {
-	Items []SearchItem `json:"items"`
-	Total int          `json:"total"`
-	Page  int          `json:"page"`
-	Size  int          `json:"size"`
+	Items  []SearchItem   `json:"items"`
+	Total  int            `json:"total"`
+	Page   int            `json:"page"`
+	Size   int            `json:"size"`
+	Actors []ActorSummary `json:"actors"`
 }
 
 type scoredHit struct {
@@ -72,25 +74,49 @@ type scoredHit struct {
 
 // Search 按媒体文件名模糊搜索，支持空格分词、子串、拼音和 ASCII 子序列匹配。
 func (s *Store) Search(q string, page, size int, sortKey, order string) SearchResult {
+	return s.SearchByActor(q, "", page, size, sortKey, order)
+}
+
+// SearchByActor filters items by exact actor name while counting actors across all keyword matches.
+func (s *Store) SearchByActor(q, actor string, page, size int, sortKey, order string) SearchResult {
 	tokens := tokenize(q)
 	page, size = normalizePage(page, size)
-	res := SearchResult{Items: []SearchItem{}, Page: page, Size: size}
+	res := SearchResult{Items: []SearchItem{}, Page: page, Size: size, Actors: []ActorSummary{}}
 	if len(tokens) == 0 {
 		return res
 	}
 
 	var hits []scoredHit
+	actorCounts := make(map[string]int)
 	s.mu.RLock()
 	for _, m := range s.media {
 		if m.Kind == KindImage && m.CoverOf != "" {
 			continue // 已并入视频卡片做海报的图片不参与搜索
 		}
-		if ok, sc := matchItem(strings.ToLower(m.Name), m.PyFull, m.PyInit, tokens); ok {
-			it := SearchItem{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime.Unix(), Duration: m.Duration}
-			hits = append(hits, scoredHit{it, sc})
+		matched, score := matchItem(strings.ToLower(m.Name), m.PyFull, m.PyInit, tokens)
+		if !matched {
+			continue
 		}
+		var name string
+		if m.Kind == KindVideo {
+			name = actorFromName(m.Name)
+			if name != "" {
+				actorCounts[name]++
+			}
+		}
+		if actor != "" && name != actor {
+			continue
+		}
+		item := SearchItem{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime.Unix(), Duration: m.Duration}
+		hits = append(hits, scoredHit{item, score})
 	}
 	s.mu.RUnlock()
+
+	res.Actors = make([]ActorSummary, 0, len(actorCounts))
+	for name, count := range actorCounts {
+		res.Actors = append(res.Actors, ActorSummary{Name: name, Count: count})
+	}
+	sortActors(res.Actors)
 
 	res.Total = len(hits)
 	slices.SortFunc(hits, func(a, b scoredHit) int {
@@ -107,6 +133,7 @@ func (s *Store) Search(q string, page, size int, sortKey, order string) SearchRe
 	for _, h := range hits[start:end] {
 		if m := s.media[h.item.ID]; m != nil {
 			h.item.Where = s.whereLocked(m.FolderID)
+			h.item.CardCover = mediaSummary(m).CardCover
 		}
 		res.Items = append(res.Items, h.item)
 	}

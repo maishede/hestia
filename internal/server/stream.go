@@ -117,13 +117,17 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ext := strings.ToLower(m.Ext)
-	if wq > 0 && (ext == ".jpg" || ext == ".jpeg" || ext == ".jfif" || ext == ".png") {
-		data, canceled := s.imageThumbnail(w, r, abs, wq, m)
-		if canceled {
+	if wq > 0 && canResizeCoverImage(ext) {
+		result, err := s.imageThumbnail(r.Context(), abs, wq, m, false)
+		if err == errFolderDeleting {
+			errJSON(w, http.StatusConflict, err.Error())
 			return
 		}
-		if len(data) > 0 {
-			serveJPEG(w, data)
+		if r.Context().Err() != nil {
+			return
+		}
+		if len(result.data) > 0 {
+			serveJPEG(w, result.data)
 			return
 		}
 	}
@@ -151,89 +155,154 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 	serveMediaContent(ctx, w, r, m.Name+m.Ext, st.ModTime(), f)
 }
 
-func (s *Server) imageThumbnail(w http.ResponseWriter, r *http.Request, abs string, targetW int, m index.Media) ([]byte, bool) {
+func canResizeCoverImage(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".jfif", ".png":
+		return true
+	default:
+		return false
+	}
+}
+
+type thumbnail struct {
+	data   []byte
+	cached bool
+}
+
+func (s *Server) imageThumbnail(parent context.Context, abs string, targetW int, m index.Media, batch bool) (thumbnail, error) {
 	cacheDir := filepath.Join(s.dataDir, "cache", "img")
 	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d-%d.jpg", m.ID, targetW, m.Size, m.Mtime.UnixNano()))
 	// Preserve already generated previews from earlier builds.
 	legacy := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", m.ID, targetW, m.Mtime.Unix()))
 	for _, path := range []string{cache, legacy} {
-		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
-			return b, false
+		if result := cachedThumbnail(path, batch); result.cached {
+			return result, nil
 		}
 	}
-	unlock, ok := s.imageJobs.lock(r.Context(), cache)
+	unlock, ok := s.imageJobs.lock(parent, cache)
 	if !ok {
-		return nil, true
+		return thumbnail{}, parent.Err()
 	}
 	defer unlock()
-	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
-		return b, false
+	if result := cachedThumbnail(cache, batch); result.cached {
+		return result, nil
 	}
 	select {
 	case s.imageSlots <- struct{}{}:
 		defer func() { <-s.imageSlots }()
-	case <-r.Context().Done():
-		return nil, true
+	case <-parent.Done():
+		return thumbnail{}, parent.Err()
 	}
-	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
-	if !ok {
-		return nil, true
+	ctx, endRead, err := s.startMediaRead(parent, m.FolderID)
+	if err != nil {
+		return thumbnail{}, err
 	}
-	img := decodeThumbnailSource(abs, targetW)
-	// endRead releases the original file before writing the JPEG response.
-	canceled := ctx.Err() != nil
+	img, err := decodeThumbnailSource(ctx, abs, targetW, batch)
+	readErr := thumbnailReadError(parent, ctx)
+	// Decoding has closed the original file, so deletion need not wait for encoding.
 	endRead()
-	if canceled {
-		mediaReadCanceled(ctx, w, r)
-		return nil, true
+	if readErr != nil {
+		return thumbnail{}, readErr
 	}
-	if img == nil {
-		return nil, false
+	if err != nil || img == nil {
+		return thumbnail{}, err
 	}
-	dst := scaleBox(img, targetW)
+	dst := scaleBox(parent, img, targetW)
+	if dst == nil {
+		return thumbnail{}, parent.Err()
+	}
 	buf := &bytes.Buffer{}
 	if err := jpeg.Encode(buf, dst, &jpeg.Options{Quality: 82}); err != nil {
-		return nil, false
+		return thumbnail{}, err
 	}
-	writeThumbnailCache(cache, buf.Bytes())
-	return buf.Bytes(), false
+	if err := parent.Err(); err != nil {
+		return thumbnail{}, err
+	}
+	if err := writeThumbnailCache(cache, buf.Bytes()); batch && err != nil {
+		return thumbnail{}, thumbnailFailure{coverCacheWrite, err}
+	}
+	return thumbnail{data: buf.Bytes()}, nil
 }
 
-func decodeThumbnailSource(abs string, targetW int) image.Image {
+func thumbnailReadError(parent, readCtx context.Context) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	if readCtx.Err() != nil {
+		return errFolderDeleting
+	}
+	return nil
+}
+
+func cachedThumbnail(path string, batch bool) thumbnail {
+	if batch {
+		st, err := os.Stat(path)
+		return thumbnail{cached: err == nil && st.Mode().IsRegular() && st.Size() > 0}
+	}
+	b, err := os.ReadFile(path)
+	return thumbnail{data: b, cached: err == nil && len(b) > 0}
+}
+
+type thumbnailReader struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (r thumbnailReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(p)
+}
+
+func decodeThumbnailSource(ctx context.Context, abs string, targetW int, batch bool) (image.Image, error) {
 	f, err := os.Open(abs)
 	if err != nil {
-		return nil
+		return nil, thumbnailFailure{coverSourceMissing, err}
 	}
 	defer f.Close()
-	config, _, err := image.DecodeConfig(f)
-	if err != nil || config.Width <= targetW {
-		return nil
+	src := thumbnailReader{ctx: ctx, Reader: f}
+	config, _, err := image.DecodeConfig(src)
+	if err != nil {
+		return nil, thumbnailFailure{coverImageRead, err}
+	}
+	if config.Width <= targetW {
+		return nil, nil
+	}
+	// Keep batch memory bounded. Larger originals can still be viewed on demand.
+	const maxBatchPixels = 16 * 1024 * 1024
+	if batch && (config.Height <= 0 || config.Width > maxBatchPixels/config.Height) {
+		return nil, nil
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil
+		return nil, thumbnailFailure{coverImageRead, err}
 	}
-	img, _, err := image.Decode(f)
+	img, _, err := image.Decode(src)
 	if err != nil {
-		return nil
+		return nil, thumbnailFailure{coverImageRead, err}
 	}
-	return img
+	return img, nil
 }
 
-func writeThumbnailCache(path string, data []byte) {
+func writeThumbnailCache(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if os.MkdirAll(dir, 0o755) != nil {
-		return
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
 	tmp, err := os.CreateTemp(dir, "thumbnail-*.tmp")
 	if err != nil {
-		return
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	_, writeErr := tmp.Write(data)
 	closeErr := tmp.Close()
-	if writeErr == nil && closeErr == nil {
-		_ = os.Rename(tmp.Name(), path)
+	if writeErr != nil {
+		return writeErr
 	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 type imageJob struct {
@@ -279,7 +348,7 @@ func (j *imageJobs) lock(ctx context.Context, key string) (func(), bool) {
 }
 
 // scaleBox 盒平均降采样（仅用于封面缩略图，质量足够、零依赖）。
-func scaleBox(src image.Image, targetW int) *image.RGBA {
+func scaleBox(ctx context.Context, src image.Image, targetW int) *image.RGBA {
 	b := src.Bounds()
 	sw, sh := b.Dx(), b.Dy()
 	th := sh * targetW / sw
@@ -292,6 +361,9 @@ func scaleBox(src image.Image, targetW int) *image.RGBA {
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, targetW, th))
 	for y := 0; y < th; y++ {
+		if ctx.Err() != nil {
+			return nil
+		}
 		sy0, sy1 := y*sh/th, (y+1)*sh/th
 		if sy1 <= sy0 {
 			sy1 = sy0 + 1

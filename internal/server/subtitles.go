@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -379,50 +380,66 @@ func (s *Server) serveVideoFrame(w http.ResponseWriter, r *http.Request, id stri
 		errJSON(w, http.StatusServiceUnavailable, "未找到 ffmpeg")
 		return
 	}
-	data, err := s.videoThumbnail(w, r, abs, m)
+	result, err := s.videoThumbnail(r.Context(), abs, m, false)
+	if r.Context().Err() != nil {
+		return
+	}
+	if err == errFolderDeleting {
+		errJSON(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		errJSON(w, http.StatusNotFound, "缩略图生成失败")
 		return
 	}
-	if len(data) > 0 {
-		serveJPEG(w, data)
+	if len(result.data) > 0 {
+		serveJPEG(w, result.data)
 	}
 }
 
-func (s *Server) videoThumbnail(w http.ResponseWriter, r *http.Request, abs string, m index.Media) ([]byte, error) {
+func (s *Server) videoThumbnail(parent context.Context, abs string, m index.Media, batch bool) (thumbnail, error) {
 	cacheDir := filepath.Join(s.dataDir, "cache", "thumb")
 	cache := filepath.Join(cacheDir, fmt.Sprintf("%s-%d-%d.jpg", m.ID, m.Size, m.Mtime.Unix()))
-	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
-		return b, nil
+	if result := cachedThumbnail(cache, batch); result.cached {
+		return result, nil
 	}
-	unlock, ok := s.imageJobs.lock(r.Context(), cache)
+	if batch && !s.tc.FFmpegOK() {
+		return thumbnail{}, nil
+	}
+	unlock, ok := s.imageJobs.lock(parent, cache)
 	if !ok {
-		return nil, nil
+		return thumbnail{}, parent.Err()
 	}
 	defer unlock()
-	if b, err := os.ReadFile(cache); err == nil && len(b) > 0 {
-		return b, nil
+	if result := cachedThumbnail(cache, batch); result.cached {
+		return result, nil
 	}
-	ctx, endRead, ok := s.beginMediaRead(w, r, m.FolderID)
-	if !ok {
-		return nil, nil
+	readCtx, endRead, err := s.startMediaRead(parent, m.FolderID)
+	if err != nil {
+		return thumbnail{}, err
 	}
 	defer endRead()
 	select {
 	case s.frameSlots <- struct{}{}:
 		defer func() { <-s.frameSlots }()
-	case <-ctx.Done():
-		return nil, nil
+	case <-readCtx.Done():
+		return thumbnail{}, thumbnailReadError(parent, readCtx)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(readCtx, 15*time.Second)
 	defer cancel()
 	run := func(seek bool) ([]byte, error) {
-		args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "2"}
+		args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+		threads := "2"
+		if batch {
+			threads = "1"
+			args = append(args, "-filter_threads", "1")
+		}
+		args = append(args, "-threads", threads)
 		if seek {
 			args = append(args, "-ss", "3")
 		}
-		args = append(args, "-i", abs, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5",
+		args = append(args, "-i", abs, "-frames:v", "1", "-vf", fmt.Sprintf("scale=%d:-2", index.CardCoverWidth), "-q:v", "5",
 			"-threads", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1")
 		cmd := exec.CommandContext(ctx, s.tc.FFmpeg, args...)
 		hideChildWindow(cmd)
@@ -433,11 +450,41 @@ func (s *Server) videoThumbnail(w http.ResponseWriter, r *http.Request, abs stri
 	if seek && ctx.Err() == nil && (err != nil || len(data) == 0) {
 		data, err = run(false)
 	}
-	if err != nil || len(data) == 0 {
-		return nil, fmt.Errorf("无法抽取视频帧")
+	if cancelErr := thumbnailReadError(parent, readCtx); cancelErr != nil {
+		return thumbnail{}, cancelErr
 	}
-	writeThumbnailCache(cache, data)
-	return data, nil
+	if err != nil || len(data) == 0 {
+		if batch && ctx.Err() == nil {
+			if _, sourceErr := os.Stat(abs); sourceErr != nil {
+				return thumbnail{}, thumbnailFailure{coverSourceMissing, sourceErr}
+			}
+		}
+		return thumbnail{}, thumbnailFailure{coverVideoFrame, thumbnailFrameError(ctx, err)}
+	}
+	if err := writeThumbnailCache(cache, data); batch && err != nil {
+		return thumbnail{}, thumbnailFailure{coverCacheWrite, err}
+	}
+	return thumbnail{data: data}, nil
+}
+
+func thumbnailFrameError(ctx context.Context, err error) error {
+	if timeout := ctx.Err(); timeout != nil {
+		return fmt.Errorf("FFmpeg: %w", timeout)
+	}
+	if err == nil {
+		return errors.New("FFmpeg returned no video frame")
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		detail := []rune(strings.Join(strings.Fields(string(exit.Stderr)), " "))
+		if len(detail) > 360 {
+			detail = append(detail[:360], '…')
+		}
+		if len(detail) != 0 {
+			return fmt.Errorf("FFmpeg: %w: %s", err, string(detail))
+		}
+	}
+	return fmt.Errorf("FFmpeg: %w", err)
 }
 
 func serveJPEG(w http.ResponseWriter, b []byte) {

@@ -23,6 +23,8 @@ const (
 	KindImage
 )
 
+const CardCoverWidth = 480
+
 func (k Kind) String() string {
 	if k == KindVideo {
 		return "video"
@@ -299,6 +301,41 @@ func (s *Store) Counts() (folders, media int) {
 	return len(s.folders), len(s.media)
 }
 
+// CoverMediaIDs snapshots the media used by the enabled libraries' cards and
+// folders. When an enabled library is still being scanned, ready is false.
+func (s *Store) CoverMediaIDs() (ids []string, ready bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, lib := range s.libs {
+		if lib.Enabled && lib.Scanning {
+			return nil, false
+		}
+	}
+
+	enabled := func(id string) bool {
+		lib := s.libs[id]
+		return lib != nil && lib.Enabled
+	}
+	for id, m := range s.media {
+		if enabled(m.LibraryID) && (m.Kind == KindImage || m.CardCoverID == "") {
+			ids = append(ids, id)
+		}
+	}
+	// A folder fallback can refer to a video that otherwise has its own poster.
+	fallbacks := map[string]bool{}
+	for _, f := range s.folders {
+		if f.CoverID != "" || f.SubVideos == 0 || !enabled(f.LibraryID) {
+			continue
+		}
+		id, ok := s.firstVideoLocked(f.ID, 0)
+		if ok && s.media[id].CardCoverID != "" && !fallbacks[id] {
+			ids = append(ids, id)
+			fallbacks[id] = true
+		}
+	}
+	return ids, true
+}
+
 // ---------- 查询 ----------
 
 var newWithin = 14 * 24 * time.Hour
@@ -323,11 +360,15 @@ func (s *Store) folderSummary(f *Folder) FolderSummary {
 		SubVideos: f.SubVideos, Mtime: f.Mtime, IsNew: isNew(f.Mtime),
 	}
 	if f.CoverID != "" {
-		sum.Cover = "/api/media/" + f.CoverID + "/image?w=480"
+		sum.Cover = cardCoverImage(f.CoverID)
 	} else if f.SubVideos > 0 {
-		sum.Cover = "/api/folders/" + f.ID + "/cover?w=480"
+		sum.Cover = fmt.Sprintf("/api/folders/%s/cover?w=%d", f.ID, CardCoverWidth)
 	}
 	return sum
+}
+
+func cardCoverImage(id string) string {
+	return fmt.Sprintf("/api/media/%s/image?w=%d", id, CardCoverWidth)
 }
 
 type FolderPage struct {
@@ -497,10 +538,10 @@ func mediaSummary(m *Media) MediaSummary {
 	sum := MediaSummary{ID: m.ID, Kind: m.Kind.String(), Name: m.Name, Size: m.Size, Mtime: m.Mtime, IsNew: isNew(m.Mtime), Subs: len(m.SubIDs)}
 	switch {
 	case m.CardCoverID != "":
-		sum.CardCover = "/api/media/" + m.CardCoverID + "/image?w=480"
+		sum.CardCover = cardCoverImage(m.CardCoverID)
 	case m.Kind == KindImage:
 		// 图片卡片直接用自身做封面
-		sum.CardCover = "/api/media/" + m.ID + "/image?w=480"
+		sum.CardCover = cardCoverImage(m.ID)
 	default:
 		// 视频没有同名封面图时回退到 ffmpeg 抽帧缩略图（服务端无 ffmpeg 时返回 404，前端显示占位图标）
 		// v= 修改时间用于文件更换后失效缓存
