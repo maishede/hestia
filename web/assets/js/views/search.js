@@ -1,14 +1,19 @@
 // 搜索页：后端分页的媒体文件名搜索
 import { api } from '../api.js'
 import { mediaCard } from '../cards.js'
-import { routeQuery, withHome } from '../navigation.js'
+import { returnHomeHref, routeQuery, withHome } from '../navigation.js'
 import { pageSize, pager } from '../pagination.js'
 import { skeleton, emptyHTML, sortBarEl, debounce } from '../util.js'
 
 export function SearchView(app) {
   const input = document.getElementById('searchInput')
-  let q = routeQuery().get('q') || ''
+  const home = returnHomeHref()
+  let q = (routeQuery().get('q') || '').trim()
   input.value = q
+  if (!q) {
+    location.replace(home)
+    return
+  }
   let sort = { key: 'relevance', order: 'desc' }
   let request
   let disposed = false
@@ -33,14 +38,9 @@ export function SearchView(app) {
     request?.abort()
     const controller = new AbortController()
     request = controller
-    $('#qtitle').textContent = q ? `“${q}”` : '搜索'
+    $('#qtitle').textContent = `“${q}”`
     $('#count').textContent = ''
-    grid.classList.toggle('list-empty', !q)
-    if (!q) {
-      pages.update(1, 0)
-      grid.innerHTML = emptyHTML('输入关键词搜索全库', '支持文件名和拼音搜索', 'search')
-      return
-    }
+    grid.classList.remove('list-empty')
     const query = new URLSearchParams({ q, page, size: pageSize, sort: sort.key, order: sort.order })
     grid.innerHTML = skeleton(8, true)
     try {
@@ -65,8 +65,15 @@ export function SearchView(app) {
   ], v => { sort = v; load() }))
   const onInput = debounce(value => {
     if (disposed) return
-    q = value.trim()
-    history.replaceState(null, '', withHome('#/search?q=' + encodeURIComponent(q)))
+    const nextQuery = value.trim()
+    if (!nextQuery) {
+      request?.abort()
+      input.value = ''
+      location.replace(home)
+      return
+    }
+    q = nextQuery
+    history.replaceState(null, '', withHome('#/search?q=' + encodeURIComponent(q), home))
     load()
   }, 350)
   const handler = e => onInput(e.target.value)

@@ -19,6 +19,24 @@ async function openDetail(context, link) {
   return detail
 }
 
+test('clearing search restores the previous actor and results page', async t => {
+  const { page } = await openLibrary(t)
+  await page.getByRole('button', { name: /林青/ }).click()
+  await page.getByRole('button', { name: '下一页' }).click()
+  const last = page.locator('#grid').getByRole('link', { name: /林青-第21集/ })
+  await last.waitFor()
+  const home = page.url()
+  const search = page.getByRole('searchbox')
+  await search.fill('陈舟')
+  await search.press('Enter')
+  await page.locator('#grid').getByRole('link', { name: /陈舟-电影/ }).waitFor()
+
+  await search.fill('')
+  await page.waitForURL(home)
+  await last.waitFor()
+  assert.equal(await page.getByRole('button', { name: /林青/ }).getAttribute('aria-pressed'), 'true')
+})
+
 test('actor results paginate on the server and return from a new tab to the same actor page', async t => {
   const { page, context } = await openLibrary(t)
   await page.getByRole('button', { name: /林青/ }).click({ timeout: 5000 })
