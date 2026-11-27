@@ -26,7 +26,7 @@ test('clearing search restores the previous actor and results page', async t => 
   const last = page.locator('#grid').getByRole('link', { name: /林青-第21集/ })
   await last.waitFor()
   const home = page.url()
-  const search = page.getByRole('searchbox')
+  const search = page.locator('#searchInput')
   await search.fill('陈舟')
   await search.press('Enter')
   await page.locator('#grid').getByRole('link', { name: /陈舟-电影/ }).waitFor()

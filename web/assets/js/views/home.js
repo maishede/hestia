@@ -26,7 +26,11 @@ export function HomeView(app) {
     <div class="library-layout">
       <aside class="actor-sidebar" aria-label="主演筛选" hidden>
         <h2>主演</h2>
+        <search class="actor-search">
+          <input id="actorSearch" type="search" aria-label="搜索主演" aria-controls="actorList" placeholder="搜索主演…" autocomplete="off" spellcheck="false">
+        </search>
         <div id="actorList" class="actor-list"></div>
+        <div id="actorEmpty" class="actor-empty" hidden>没有匹配的主演</div>
       </aside>
       <div class="actor-picker" hidden>
         <label for="actorPicker">主演</label>
@@ -50,6 +54,8 @@ export function HomeView(app) {
   const count = root.querySelector('#count')
   const recent = root.querySelector('#recentWrap')
   const actorList = root.querySelector('#actorList')
+  const actorSearch = root.querySelector('#actorSearch')
+  const actorEmpty = root.querySelector('#actorEmpty')
   const actorPicker = root.querySelector('#actorPicker')
   const pages = pager(next => { location.hash = homeHref(actor, next) }, '媒体库分页')
   grid.after(pages.nav)
@@ -63,6 +69,19 @@ export function HomeView(app) {
     const button = event.target.closest('button[data-actor]')
     if (button) selectActor(button.dataset.actor)
   }
+
+  function filterActors() {
+    const query = actorSearch.value.trim().toLowerCase()
+    let matches = 0
+    for (const button of actorList.querySelectorAll('button[data-actor]')) {
+      const name = button.dataset.actor
+      const visible = !name || name.toLowerCase().includes(query)
+      button.hidden = !visible
+      if (name && visible) matches++
+    }
+    actorEmpty.hidden = !query || matches > 0
+  }
+  actorSearch.addEventListener('input', filterActors)
 
   async function loadActors() {
     let actors
@@ -81,6 +100,7 @@ export function HomeView(app) {
       `<button type="button" data-actor="${esc(name)}" aria-pressed="${name === actor}">
         <span>${esc(label)}</span>${count == null ? '' : `<small>${count}</small>`}
       </button>`).join('')
+    filterActors()
     for (const { name, label } of choices) actorPicker.add(new Option(label, name))
     actorPicker.value = actor
     actorList.parentElement.hidden = false

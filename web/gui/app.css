@@ -80,11 +80,13 @@ header h1 span { font-weight: 400; color: var(--muted); }
 .libdot { width: 8px; height: 8px; border-radius: 99px; background: #22b573; flex-shrink: 0; }
 .libdot.off { background: #b6bccb; }
 .libdot.scan { background: #f5a623; animation: pulse 1.2s infinite; }
+.libdot.error { background: #ba2e36; }
 @keyframes pulse { 50% { opacity: .35; } }
 .libmain { flex: 1; min-width: 0; }
 .libname { font-size: 13.5px; font-weight: 700; }
 .libpath { font-size: 12px; color: var(--muted); word-break: break-all; }
 .libstat { font-size: 12px; color: var(--muted); }
+.libstat.error { color: #ba2e36; }
 .foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .muted { color: var(--muted); font-size: 12.5px; }
 .small { font-size: 12px; margin-top: 10px; }

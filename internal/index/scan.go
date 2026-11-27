@@ -67,6 +67,10 @@ func (s *Store) rescanLibrary(libID string) error {
 		cur.LastErr = ""
 		if err != nil {
 			cur.LastErr = err.Error()
+			// Keep the library configured for recovery, but stop serving its stale index.
+			s.dropLibraryLocked(libID)
+			s.rebuildLocked()
+			cur.Files, cur.Dirs = 0, 0
 		} else {
 			n, d := 0, 0
 			for _, m := range s.media {

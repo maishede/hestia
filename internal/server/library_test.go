@@ -173,6 +173,44 @@ func TestCollectionPages(t *testing.T) {
 	}
 }
 
+func TestUnavailableLibraryHidesRecentMediaWithoutLosingProgress(t *testing.T) {
+	srv, root := libraryFixture(t, "Series/episode.mp4")
+	mediaID := index.NewID(root, "Series/episode.mp4")
+	srv.prog.Set(progress.Entry{MediaID: mediaID, Position: 42, Duration: 100})
+	type recentResponse struct {
+		Items []progress.Entry `json:"items"`
+	}
+	recent := func() recentResponse {
+		return decodeLibraryResponse[recentResponse](t, localLibraryRequest(srv, "GET", "/api/progress/recent", ""))
+	}
+	if got := recent(); len(got.Items) != 1 || got.Items[0].Position != 42 {
+		t.Fatalf("initial recent media = %+v", got)
+	}
+	offline := filepath.Join(t.TempDir(), "offline")
+	if err := os.Rename(root, offline); err != nil {
+		t.Fatal(err)
+	}
+	libID := srv.store.LibID(root)
+	if err := srv.store.RescanLibrary(libID); err == nil {
+		t.Fatal("rescan of unavailable library unexpectedly succeeded")
+	}
+	if got := recent(); len(got.Items) != 0 {
+		t.Errorf("unavailable media still appears in recent items: %+v", got)
+	}
+	if saved, ok := srv.prog.Get(mediaID); !ok || saved.Position != 42 {
+		t.Errorf("progress changed while library was unavailable: %+v, exists = %v", saved, ok)
+	}
+	if err := os.Rename(offline, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.store.RescanLibrary(libID); err != nil {
+		t.Fatal(err)
+	}
+	if got := recent(); len(got.Items) != 1 || got.Items[0].Position != 42 {
+		t.Errorf("recent media after recovery = %+v", got)
+	}
+}
+
 func TestActorListAndVideoPages(t *testing.T) {
 	srv, root := libraryFixture(t, "林 青 & 吴 -第2集.MP4", "合集/子目录/林 青 & 吴-第10集-加长版.mkv",
 		"合集/林 青 & 吴二号-其他.mp4", "合集/只有文件名.mp4", "合集/-没有主演.mp4",

@@ -53,17 +53,24 @@ function render(s) {
   if (libsJson !== lastLibsJson) {
     lastLibsJson = libsJson
     const list = $('libList')
-    list.innerHTML = s.libs.length ? s.libs.map(l => `
+    list.innerHTML = s.libs.length ? s.libs.map(l => {
+      const failed = l.enabled && !l.scanning && !!l.lastErr
+      const dot = !l.enabled ? 'off' : (l.scanning ? 'scan' : (failed ? 'error' : ''))
+      const status = !l.enabled ? '已停用' : l.scanning ? '扫描中… ' + l.files + ' 项'
+        : failed ? '文件夹无法访问，内容已隐藏。检查路径或磁盘后重新扫描，或点击「移除」。'
+          : l.files + ' 文件 · ' + l.dirs + ' 文件夹'
+      return `
       <div class="libitem ${l.enabled ? '' : 'off'}" data-id="${l.id}">
-        <span class="libdot ${l.scanning ? 'scan' : (l.enabled ? '' : 'off')}"></span>
+        <span class="libdot ${dot}"></span>
         <div class="libmain">
           <div class="libname">${esc(l.label)}</div>
           <div class="libpath">${esc(l.path)}</div>
-          <div class="libstat">${l.scanning ? '扫描中… ' + l.files + ' 项' : (l.lastErr ? '错误：' + esc(l.lastErr) : l.files + ' 文件 · ' + l.dirs + ' 文件夹')}</div>
+          <div class="libstat ${failed ? 'error' : ''}"${failed ? ` title="${esc(l.lastErr)}"` : ''}>${status}</div>
         </div>
         <label class="switch" title="启用/停用"><input type="checkbox" class="liben" ${l.enabled ? 'checked' : ''}><i></i></label>
         <button class="btn danger libdel">移除</button>
-      </div>`).join('')
+      </div>`
+    }).join('')
       : '<div class="muted" style="padding:14px 4px">还没有媒体库，在上方输入视频文件夹路径添加</div>'
   }
   $('statText').textContent = s.scanning ? '后台扫描中…' : `索引：${s.folders} 文件夹 · ${s.media} 媒体`
