@@ -25,6 +25,13 @@ import (
 	"hestia/internal/config"
 )
 
+const guiDPIAwarenessPerMonitorV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4)
+
+var (
+	guiSetThreadDPIAwareness = tUser32.NewProc("SetThreadDpiAwarenessContext")
+	guiGetWindowDPI          = tUser32.NewProc("GetDpiForWindow")
+)
+
 func runApp(a *app, finishStartup func()) {
 	if err := a.srv.StartListener(); err != nil {
 		a.logger.Printf("服务自启失败（可在窗口中手动启动）: %v", err)
@@ -35,6 +42,14 @@ func runApp(a *app, finishStartup func()) {
 // runGUI 在主线程运行 WebView2 窗口（阻塞直至窗口关闭）。
 func runGUI(a *app, finishStartup func()) {
 	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	// Only the console thread uses per-monitor DPI. The startup window has its own drawing thread.
+	if guiSetThreadDPIAwareness.Find() == nil {
+		previousDPIContext, _, _ := guiSetThreadDPIAwareness.Call(guiDPIAwarenessPerMonitorV2)
+		if previousDPIContext != 0 {
+			defer guiSetThreadDPIAwareness.Call(previousDPIContext)
+		}
+	}
 	previousLog := log.Writer()
 	log.SetOutput(a.logger.Writer()) // Capture WebView2 runtime errors in the application log.
 	defer log.SetOutput(previousLog)
@@ -89,7 +104,15 @@ func runGUI(a *app, finishStartup func()) {
 	}
 	a.logger.Printf("WebView2 初始化耗时 %d 毫秒", time.Since(webviewStarted).Milliseconds())
 	defer w.Destroy()
-	w.SetSize(620, 590, webview2.HintNone)
+	const baseDPI = 96
+	width, height := 620, 590 // Logical client size at 100% scaling.
+	if guiGetWindowDPI.Find() == nil {
+		if dpi, _, _ := guiGetWindowDPI.Call(uintptr(w.Window())); dpi != 0 {
+			width = width * int(dpi) / baseDPI
+			height = height * int(dpi) / baseDPI
+		}
+	}
+	w.SetSize(width, height, webview2.HintNone)
 	defer removeTray()
 	pageStarted := time.Now()
 	var mounted, ready, failed bool // All changes run on the WebView2 UI thread.

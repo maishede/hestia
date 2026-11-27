@@ -233,6 +233,12 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 			return r
 		case w32.WMSize:
 			w.browser.Resize()
+		case w32.WMDpiChanged:
+			bounds := (*w32.Rect)(unsafe.Pointer(lp))
+			_, _, _ = w32.User32SetWindowPos.Call(
+				hwnd, 0, uintptr(bounds.Left), uintptr(bounds.Top),
+				uintptr(bounds.Right-bounds.Left), uintptr(bounds.Bottom-bounds.Top),
+				w32.SWPNoZOrder|w32.SWPNoActivate)
 		case 0x0018: // WM_SHOWWINDOW
 			if wp != 0 {
 				w.browser.Resize()
@@ -437,7 +443,15 @@ func (w *webview) SetSize(width int, height int, hints Hint) {
 		r.Top = 0
 		r.Right = int32(width)
 		r.Bottom = int32(height)
-		_, _, _ = w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0)
+		var adjusted uintptr
+		if w32.User32GetDpiForWindow.Find() == nil && w32.User32AdjustWindowRectExForDpi.Find() == nil {
+			if dpi, _, _ := w32.User32GetDpiForWindow.Call(w.hwnd); dpi != 0 {
+				adjusted, _, _ = w32.User32AdjustWindowRectExForDpi.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0, 0, dpi)
+			}
+		}
+		if adjusted == 0 {
+			_, _, _ = w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0)
+		}
 		_, _, _ = w32.User32SetWindowPos.Call(
 			w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top),
 			w32.SWPNoZOrder|w32.SWPNoActivate|w32.SWPNoMove|w32.SWPFrameChanged)

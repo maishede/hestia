@@ -48,6 +48,11 @@ var (
 	User32GetAncestor        = user32.NewProc("GetAncestor")
 )
 
+var (
+	User32AdjustWindowRectExForDpi = user32.NewProc("AdjustWindowRectExForDpi")
+	User32GetDpiForWindow          = user32.NewProc("GetDpiForWindow")
+)
+
 const (
 	SM_CXSCREEN = 0
 	SM_CYSCREEN = 1
@@ -95,6 +100,7 @@ const (
 	WMGetMinMaxInfo = 0x0024
 	WMNCLButtonDown = 0x00A1
 	WMMoving        = 0x0216
+	WMDpiChanged    = 0x02E0
 	WMApp           = 0x8000
 )
 
