@@ -2,50 +2,73 @@
 
 简体中文 | [English](README.en.md) | [日本語](README.ja.md)
 
-Hestia 是一款自托管的家庭媒体服务器，支持 Windows、macOS 和 Linux。它把多个磁盘和文件夹中的本地视频、图片整理成媒体库，手机和电脑可在局域网内用浏览器搜索、浏览和播放。支持 SRT/ASS 字幕、断点续播和 FFmpeg 按需转码。
-
-- **单文件**：一个约 11 MB 的 exe，无需安装 Hestia。Windows 界面使用 WebView2 运行时
-- **局域网自用**：浏览和播放免登录，页面隐藏物理路径，删除媒体需要本机操作或授权码
-- **手机优先**：响应式浅色 UI（播放器为深色放映厅风格）+ 触屏手势
-- **跨平台**：Windows 一等公民（WebView2 GUI 窗口 + 托盘常驻 + 开机自启），macOS / Linux 同源编译（控制台模式）
+Hestia 是一款支持 Windows、macOS 和 Linux 的自托管家庭媒体服务器。它把不同磁盘和文件夹中的本地视频、图片整理成媒体库，让手机和电脑在同一局域网内用浏览器搜索、浏览和播放。支持 SRT、ASS 字幕、断点续播和 FFmpeg 按需转码。
 
 ## 快速开始
 
-### 构建
+### Windows
 
-```bash
-# Windows（或直接双击 build.bat）
-build.bat
+1. 从 [最新正式版](https://github.com/maishede/hestia/releases/latest) 下载 `Hestia.exe`（Windows x64），放到可写的文件夹中。
+2. 双击运行。服务随控制台启动。如果提示缺少运行时，安装 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)。
+3. 点击「添加文件夹」，选择存放视频或图片的目录。可以添加多个媒体库，扫描完成后就能浏览。
+4. 在本机点击底栏的「打开网页」。手机连到同一局域网后，用浏览器打开底栏显示的访问地址，例如 `http://192.168.1.10:8080`。请以控制台显示的地址为准，启动时端口被占用会尝试顺延最多 20 个端口。
 
-# macOS / Linux
-./build.sh
+关闭控制台时，可以缩到托盘继续运行，也可以退出并停止服务。左键点击托盘图标或再次打开 EXE 可恢复窗口。
+
+### macOS 和 Linux
+
+按[从源码构建](#从源码构建)的说明生成可执行文件，在终端运行它。首次运行会在可执行文件旁创建 `config.json`。按下方示例填写媒体库路径，再用浏览器打开终端显示的地址。用 `Ctrl+C` 退出服务。
+
+## 整理媒体库
+
+把最外层目录添加为媒体库。每个一级子文件夹会在首页显示为一张合集卡片，下面还可以继续分层。
+
+```text
+媒体库根目录
+└── 周末电影
+    ├── poster.jpg
+    ├── 林青-远方.mp4
+    ├── 林青-远方.zh.srt
+    └── 花絮
+        └── 幕后.mp4
 ```
 
-需要 Go 1.27 或更新版本。第三方 Go 依赖已随仓库提供，可以离线构建。Windows 产物为 `dist/Hestia.exe`，Linux 为 `dist/Hestia`，macOS 为 `dist/Hestia.app/Contents/MacOS/Hestia`。
+- `poster.jpg` 可以作为合集封面。同名图片，例如 `林青-远方.jpg`，可以作为对应视频的封面。
+- 搜索按视频和图片的文件名匹配，支持中文子串、拼音全拼与首字母、英文按顺序跳字匹配以及空格分词。
+- 文件夹内可按名称、修改日期或大小排序。搜索结果可按相关度或修改日期排序。
+- `主演名-片名` 格式的视频会进入主演筛选。电脑端使用左侧栏，手机端使用下拉框。搜索时按全部命中结果统计主演，点击搜索框的 × 返回全部合集。
+- 直接放在媒体库根目录的文件仍可搜索。符合命名规则的根目录视频也会进入主演筛选。
 
-**前端不需要单独构建**：前端是原生 HTML/CSS/ES Modules（无 npm、无打包步骤），`go:embed` 在编译时把 `web/` 目录整个打进 exe，运行时由 Go 服务直接输出。改前端只需重新执行构建命令。hls.js 与西瓜播放器 xgplayer 3.0.27 的 JS/CSS 已随源码入库，播放器不依赖 CDN；xgplayer 的 MIT 许可见 `web/assets/js/vendor/xgplayer.LICENSE.txt`。
+## 播放与字幕
 
-交叉编译（在任意平台构建其他平台产物）：
+浏览器支持的格式会直接播放，例如常见的 H.264 MP4。需要转换时，Hestia 调用 FFmpeg 生成供浏览器播放的 HLS 流。外部字幕可以与视频同名，或者在文件名中加语言后缀，如上例中的 `.zh.srt`。可提取的内嵌文本字幕在播放器的 CC 菜单中选择。续播使用浏览器和服务端记录里较新的进度。
 
-```bash
-GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -H windowsgui" -o dist/Hestia.exe .
-GOOS=darwin   GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
-GOOS=linux    GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
-```
+| 操作 | 用法 |
+|---|---|
+| 桌面 | 单击画面播放或暂停。播放器可铺满网页或进入浏览器全屏。 |
+| 手机 | 左侧上下滑调亮度，右侧上下滑调音量（iOS 上为跳转进度）。横滑可跳转，长按为 2 倍速，双击两侧可前后跳 10 秒，双击中间切换播放。 |
+| 键盘 | 空格或 K 播放或暂停，J/L 前后跳 10 秒，左右方向键前后跳 5 秒，上下方向键调音量，F 切换全屏。 |
 
-### 运行
+播放器支持 0.5×、1×、1.5× 和 2× 播放速度，也可以切换到同一文件夹里的上一部或下一部视频。
 
-双击 `Hestia.exe` 打开 Windows 控制台。手机可在网页上搜索、浏览和播放媒体，服务配置集中在控制台。
+### 可选的 FFmpeg 和 FFprobe
 
-1. 点击「添加文件夹」，输入路径（如 `D:\电影`）或点击「浏览…」，再确认添加。可添加多个媒体库，改动无需重启。
-2. 服务随程序启动。若配置端口已被占用，会尝试接下来的 20 个端口。控制台底栏显示访问地址，点击可查看实际的本机和局域网访问地址。
-3. 底栏可停止和启动服务。在「设置」中可修改端口，或开启登录 Windows 后自动运行。
-4. 关闭窗口时可选择缩到托盘继续运行，或退出并停止服务。左键点击托盘图标可恢复窗口，右键菜单也提供「退出」。
-5. 重复启动 exe 会唤出已经运行的控制台窗口。
+[FFmpeg](https://ffmpeg.org/download.html) 用于转码、抽取视频封面和内嵌文本字幕。FFprobe 用于识别媒体编码和字幕轨。转码需要含 `libx264` 编码器的 FFmpeg 构建。
 
-Windows 控制台提供「检查更新」按钮，仅在点击后查询 GitHub 最新正式版。发现新版本后，点「下载并安装（将重启）」即可下载、校验 SHA-256、替换 exe 并重启；`config.json` 和 `data/` 会保留。更新需要当前程序目录可写，并且新 Release 含 `Hestia.exe` 及 SHA-256 校验信息。v0.3.6 及更早版本尚无此功能，首次升级到包含更新器的版本仍需手动替换一次。
+将这两个程序放到 Hestia 可执行文件旁、`bin/`、`ffmpeg/bin/`，或加入系统 `PATH`。Hestia 按这个顺序查找。安装后重新启动 Hestia，Windows 控制台的「设置」会显示 FFmpeg 状态。
 
-默认将 `config.json` 和 `data/` 存在程序所在目录，便于迁移和备份。数据目录包含缩略图、字幕和封面缓存、转码临时段、滚动日志、播放进度及 WebView2 浏览器数据。配置文件可直接编辑，约 2 秒内热加载。
+## Windows 控制台常用操作
+
+- 新增或移动媒体后点**「重新扫描」**。启动、添加或启用媒体库时也会扫描。扫描时发现无法访问的库会从网页隐藏，恢复路径后可重新扫描。
+- 扫描后点**「生成封面」**和「开始」。有效缓存会直接复用。收起弹窗可继续操作，完成时会显示结果。未生成的项目可展开查看原因。点击「停止」会保留已生成的封面。浏览时也会按需加载封面，超大图片留到浏览时处理。
+- 在**「设置 → 语言」**切换控制台语言，网页通过顶栏切换。默认简体中文，另有 English 和日本語。两边各自保存选择。
+- 点击**「设置 → 检查更新」**。安装时会下载并验证 SHA-256，然后替换 EXE 并重启。配置和数据会保留，程序目录需可写。
+
+## 配置、数据与安全
+
+`config.json` 和 `data/` 默认保存在可执行文件旁。`data/` 保存播放进度、缩略图与字幕缓存、转码临时文件和日志。Windows 版还在这里保存 WebView2 数据。日志入口是 `data/logs/hestia.log`，Windows 控制台可直接打开。
+
+配置文件可手动编辑，通常约两秒后读取。切换端口后请使用新地址访问。下面的路径是 Windows 示例，macOS 或 Linux 请换成实际媒体目录。`autoStart` 控制 Windows 登录时自启。`openBrowser` 控制 macOS 或 Linux 启动后是否打开浏览器。
 
 ```json
 {
@@ -60,77 +83,72 @@ Windows 控制台提供「检查更新」按钮，仅在点击后查询 GitHub �
 }
 ```
 
-### 语言
+**网络访问。** 默认监听 `0.0.0.0`，局域网内的访问者可直接浏览和播放。仅在可信局域网使用，避免将端口公开到互联网。只需要在本机使用时，将 `listen` 设为 `127.0.0.1`。
 
-同一个程序内可切换简体中文、English 和日本語，默认简体中文。Windows 控制台在「设置 → 语言」里切换，选择保存在 `config.json` 中。网页可在顶栏切换语言，选择保存在当前浏览器中。
+**移除与删除。** 控制台的「移除媒体库」只取消目录挂载，磁盘文件会保留。网页详情页的「删除所在文件夹媒体」会先预览范围，再永久删除该文件夹直属的视频、图片和字幕，并将文件夹改名为「原名-原因」。子文件夹和其他文件会保留。手机等局域网设备需要输入 Hestia 所在电脑显示的删除授权码。程序重启后授权码会更新。
 
-### 手动生成封面
+## 技术架构
 
-媒体库扫描完成后，在 Windows 控制台点击「生成封面」，再在弹窗中点「开始」。可收起弹窗继续使用控制台，随时查看进度，完成后会自动显示结果。未生成的项目可展开查看文件名和原因。
-
-封面逐张生成，已有有效缓存的项目会跳过。可随时点「停止」，已生成的封面会保留，下次开始时直接复用。浏览时仍可按需加载封面。为控制内存，超大图片仍在浏览时按需处理。视频抽帧需要 FFmpeg。
-
-### ffmpeg（转码兜底，推荐配置）
-
-浏览器普遍无法直接播放 **HEVC(H.265) / AC3 / DTS / RMVB** 等编码。Hestia 检测到这类文件会自动用 ffmpeg 按需转码为 HLS 再播放，无需任何手动操作；播放停止后转码进程自动销毁。
-
-自动查找顺序：exe 同目录 → `bin/` 子目录 → 系统 `PATH`。没有 ffmpeg 时 H.264/MP4 等常规格式仍可直链播放（配置窗口会显示提示）。
-
-## 功能一览
-
-| 模块 | 说明 |
-|---|---|
-| 浏览 | 母文件夹、子文件夹、视频和图片由后端分页，每页 20 项。卡片显示本地修改日期。首页和搜索结果中的卡片在新标签页打开，详情页的「返回主页」恢复原页码和主演筛选。 |
-| 主演 | 首页从「主演名-片名」格式的视频名提取主演。桌面端可在左侧搜索并选择主演，手机端用下拉框。选中后按主演分页浏览视频。 |
-| 排序 | 名称（自然排序，“第2集”排在“第10集”前）/ 修改日期 / 大小，正序倒序可切，记忆选择 |
-| 搜索 | 按视频和图片的文件名模糊搜索并分页，支持中文子串、**拼音全拼和首字母**、英文子序列以及空格分词。主演列表按全部搜索结果筛选，点击主演可缩小结果范围，点击搜索框的 × 可回到全部合集。 |
-| 播放 | 视频在当前详情标签页打开，鼠标单击画面播放或暂停。左侧全屏按钮铺满网页，右侧按钮进入浏览器全屏。支持原画直链、HTTP Range、0.5×/1×/1.5×/2× 倍速和同文件夹上一部、下一部。 |
-| 手势 | 左半屏上下滑调亮度 · 右半屏上下滑调音量（iOS 上改为快进）· 长按 2 倍速 · 双击左右 ±10s / 中间播放暂停 · 水平滑动快进 |
-| 键盘 | 空格/K 播放暂停 · J/L ±10s · ←/→ ±5s · ↑/↓ 音量 · F 全屏 |
-| 字幕 | 外挂 srt/ass（同名或"视频名.语言"）自动加载默认开启；内嵌文本字幕轨（srt/ass/mov_text）CC 菜单按需提取；统一转 WebVTT 原生渲染 |
-| 进度 | 断点续播（本地 + 服务端合并，较新者胜）；首页"继续观看"带进度条；**多设备进度同步**（最后写入优先） |
-| 转码 | HEVC/MKV/AC3 等通过 FFmpeg 转为 H.264/AAC HLS。准备就绪后没有媒体读取的预留会话约 25 秒内回收，已读取的会话空闲约 2 分钟回收，并发上限 3。 |
-| 热配置 | 媒体库增删改、端口切换，均不中断服务；启动、添加或启用媒体库时及手动「重新扫描」时扫描，不做后台周期扫描。路径不可访问时隐藏该库内容，保留配置和观看进度；恢复路径后重新扫描，也可在控制台移除该库。 |
-| 运维 | Windows GUI 配置窗口（WebView2 加载内嵌页面，与手机端同款浅色设计；启停/路径/端口/自启/重扫/日志/检查更新；GUI 接口仅绑定 127.0.0.1，局域网不可达）；滚动日志（`data/logs/hestia.log`，5MB×3，窗口可一键打开）；缩略图/字幕/封面帧磁盘缓存 |
-
-## 目录约定
-
-```
-媒体库根（配置项）
-└── 母文件夹            ← 首页封面墙
-    └── 子文件夹        ← 可继续嵌套
-        ├── 视频 (mp4/mkv/webm/avi/mov/ts/...)
-        ├── 字幕 (srt/ass)          ← 与视频同名自动挂载
-        └── 图片 (jpg/png/webp/...) ← 自动作为封面；同名图片还会成为视频卡片封面
+```mermaid
+flowchart TB
+    Browser["手机或电脑浏览器"] -->|"局域网 HTTP"| Media["媒体接口 · 默认端口 8080"]
+    Console["Windows 控制台 · WebView2"] -->|"本机回环 HTTP"| Admin["管理接口 · 127.0.0.1"]
+    Media --> Core["Hestia Go 进程"]
+    Admin --> Core
+    Core --> Files["本地视频、图片和字幕"]
+    Core --> Data["config.json 与 data/"]
+    Core -->|"按需调用"| Tools["FFmpeg / FFprobe"]
 ```
 
-直接放在**媒体库根目录**下的文件可以通过搜索找到，符合命名规则的根目录视频也会出现在主演筛选结果中。
+1. `internal/index` 扫描媒体目录，建立内存索引。分页、文件名搜索、主演筛选和封面匹配都使用同一份索引。
+2. `internal/server` 提供媒体接口。直接播放时按需读取原文件的字节范围。转码时启动 FFmpeg，生成临时 HLS 分段。最多同时运行三个转码会话。退出播放器时会请求结束会话，服务端也会回收空闲会话。
+3. 浏览与播放界面在 `web/`，Windows 管理界面在 `web/gui/`。Go 构建时用 `go:embed` 把两套界面打入可执行文件。网页使用原生 HTML、CSS、JavaScript 模块和随项目提供的 xgplayer、hls.js。
 
-## 从源码运行（开发）
+## 从源码构建
+
+需要 Go 1.27 或更高版本。Go 依赖已放入 `vendor/`，前端直接随 Go 编译嵌入。
+
+| 平台 | 在仓库根目录执行 | 产物 |
+|---|---|---|
+| Windows | PowerShell 中运行 `.\build.bat` | `dist/Hestia.exe` |
+| macOS | `bash build.sh` | `dist/Hestia.app/Contents/MacOS/Hestia` |
+| Linux | `bash build.sh` | `dist/Hestia` |
+
+开发时可用 `HESTIA_HOME` 把配置和数据放到独立目录。Windows 下在 PowerShell 中设置变量后启动程序。
+
+```powershell
+$env:HESTIA_HOME = Join-Path (Get-Location) '.dev'
+go run -mod=vendor .
+```
+
+macOS 和 Linux 可在启动命令中指定目录。
 
 ```bash
-HESTIA_HOME=./.dev go run .    # 数据/配置隔离到 .dev 目录
+HESTIA_HOME="$PWD/.dev" go run -mod=vendor .
 ```
 
-## 已知边界
+交叉编译时通过 `GOOS` 和 `GOARCH` 指定目标平台。
 
-- 中文排序按 Unicode 码点序（拼音匹配已覆盖搜索场景）
-- ass 字幕转 VTT 不保留特效样式；内嵌 PGS 图形字幕轨不支持
-- GUI 仅 Windows；macOS/Linux 为控制台运行，配置走 `config.json`
-- 图片缩略图仅 jpeg/png（其他格式回原图）；HEIC 图片大部分浏览器不显示
+```bash
+mkdir -p dist
+GOOS=windows GOARCH=amd64 go build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" -o dist/Hestia.exe .
+GOOS=darwin GOARCH=arm64 go build -mod=vendor -trimpath -ldflags "-s -w" -o dist/Hestia-darwin-arm64 .
+GOOS=linux GOARCH=amd64 go build -mod=vendor -trimpath -ldflags "-s -w" -o dist/Hestia-linux-amd64 .
+```
 
-## 第三方组件（均已 vendor）
+运行 `go test -mod=vendor ./...` 检查 Go 测试。还可参见[播放器端到端测试](tools/player-tests/README.md)。
+
+## 兼容性与第三方组件
+
+- ASS 字幕转为 WebVTT 后会丢失特效样式。内嵌 PGS 图片字幕暂不支持。
+- 图片缩略图支持 JPEG（含 JFIF）和 PNG。其他格式由浏览器读取原图，HEIC 等格式能否显示取决于浏览器。
+- 中文名称按 Unicode 码点排序。可以用拼音搜索。
 
 | 组件 | 许可证 | 用途 |
 |---|---|---|
-| [mozillazg/go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | 拼音搜索 |
-| [jchv/go-webview2](https://github.com/jchv/go-webview2) | MIT | Windows GUI 窗口（WebView2，Win11 自带运行时） |
-| [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | 桌面浏览器 HLS 播放 |
-| [xgplayer](https://github.com/bytedance/xgplayer) | MIT | 网页播放器与播放控制 |
-| ffmpeg / ffprobe | GPL（外部程序，按需自备） | 转码 / 探测 |
+| [go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | 拼音搜索 |
+| [go-webview2](https://github.com/jchv/go-webview2) | MIT | Windows 控制台 |
+| [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | 浏览器 HLS 播放 |
+| [xgplayer](https://github.com/bytedance/xgplayer) | [MIT](web/assets/js/vendor/xgplayer.LICENSE.txt) | 网页播放器 |
 
-## 安全说明
-
-服务默认监听 `0.0.0.0`，局域网可访问媒体。在 Windows 控制台点「打开网页」，然后进入视频或图片详情，点「删除所在文件夹媒体」并填写原因。手机端可在同一详情入口使用电脑删除窗口里的「查看手机授权码」，输入后查看删除范围。授权码在 Hestia 重启后更新，请仅在可信的局域网使用。确认后会停止相关播放和转码，永久删除该目录直属的视频、图片和字幕，并改名为「原名-原因」。子文件夹和其他文件会保留。若其他程序仍占用文件，按提示关闭后再试。
-
-如需仅本机访问，把 `listen` 改为 `127.0.0.1`。请勿将端口暴露到公网。
+FFmpeg 和 FFprobe 是另行安装的外部程序。其许可证取决于构建选项，详见 [FFmpeg 许可说明](https://ffmpeg.org/legal.html)。

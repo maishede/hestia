@@ -2,50 +2,73 @@
 
 [简体中文](README.md) | English | [日本語](README.ja.md)
 
-Hestia is a self-hosted home media server for Windows, macOS, and Linux. It organizes local videos and photos from multiple drives and folders into a library you can search and browse on phones and computers over your local network. Stream videos in the browser with SRT and ASS subtitles, resume playback, and use FFmpeg to transcode on demand.
-
-- **Single executable** (about 11 MB on Windows). Hestia needs no installation. Its Windows interface uses the WebView2 Runtime.
-- **For your local network.** Browsing and playback require no login. The site hides filesystem paths. Media deletion requires local access or an authorization code.
-- **Designed for phones.** A responsive light interface, dark playback view, and touch gestures.
-- **Cross-platform.** Windows offers a WebView2 window, system tray controls, and startup at sign-in. macOS and Linux run in a terminal.
+Hestia is a self-hosted home media server for Windows, macOS, and Linux. It brings videos and photos from local drives and folders into one library. Search, browse, and watch from a phone or computer on the same local network. It supports SRT and ASS subtitles, resume playback, and on-demand FFmpeg transcoding.
 
 ## Quick start
 
-### Build
+### Windows
 
-```bash
-# Windows (or double-click build.bat)
-build.bat
+1. Download `Hestia.exe` (Windows x64) from the [latest release](https://github.com/maishede/hestia/releases/latest) and put it in a folder you can write to.
+2. Double-click the executable. The server starts with the console. If the app reports a missing runtime, install the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+3. Choose **Add folder** (「添加文件夹」 in the default interface) and select a folder with videos or photos. You can add several libraries. They are ready to browse when scanning finishes.
+4. Select **Open web app** (「打开网页」 by default) in the footer to use Hestia on this computer. On a phone on the same LAN, open the address in the footer, such as `http://192.168.1.10:8080`. Use the address shown in the console. At startup, Hestia tries up to 20 higher port numbers if the configured port is unavailable.
 
-# macOS / Linux
-./build.sh
+When you close the console, you can keep the server running in the tray or stop it and exit. Click the tray icon or open the EXE again to restore the window.
+
+### macOS and Linux
+
+[Build from source](#build-from-source) and run the executable in a terminal. On its first run, Hestia creates `config.json` beside the executable. Add your media directory to that file using the example below, then open the address shown in the terminal. Press `Ctrl+C` to stop the server.
+
+## Organize your library
+
+Add the outer folder as a media library. Each folder one level below that root appears as a collection on the home page and can contain more folders.
+
+```text
+Library root
+└── Weekend movies
+    ├── poster.jpg
+    ├── Alice-Far Away.mp4
+    ├── Alice-Far Away.en.srt
+    └── Extras
+        └── Behind the scenes.mp4
 ```
 
-Requires Go 1.27 or later. Go dependencies are included in the repository for offline builds. The outputs are `dist/Hestia.exe` on Windows, `dist/Hestia` on Linux, and `dist/Hestia.app/Contents/MacOS/Hestia` on macOS.
+- `poster.jpg` can serve as the collection cover. An image with the same base name as a video, such as `Alice-Far Away.jpg`, can be used on that video's card.
+- Search matches video and image filenames. It supports Chinese substring matches, full pinyin and initials, English letters in order with gaps, and space-separated terms.
+- Sort files in a folder by name, date modified, or size. Sort search results by relevance or date modified.
+- Videos named `Cast-Title` appear in the cast filter. Use the sidebar on desktop or the dropdown on a phone. Search counts cast members across all matching results. Select × in the search box to return to all collections.
+- Files directly under the library root appear in search. Root-level videos that follow the naming convention also appear in the cast filter.
 
-The frontend uses HTML, CSS, and ES modules. There is no separate frontend build or npm install. Go embeds the entire `web/` directory and serves it at runtime. Rebuild Hestia after editing the frontend. The source includes hls.js and the JavaScript and CSS for xgplayer 3.0.27, so playback needs no CDN. The xgplayer MIT license is in [xgplayer.LICENSE.txt](web/assets/js/vendor/xgplayer.LICENSE.txt).
+## Playback and subtitles
 
-To cross-compile, select the target operating system and architecture as shown below.
+Hestia plays browser-compatible files directly, such as typical H.264 MP4 files. When conversion is needed, Hestia uses FFmpeg to create an HLS stream for the browser. External subtitles can share the video's base name or use a language suffix such as `.en.srt`. Supported embedded text subtitles are available in the player's CC menu. Resume playback uses the newer position recorded by the browser or the server.
 
-```bash
-GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -H windowsgui" -o dist/Hestia.exe .
-GOOS=darwin   GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
-GOOS=linux    GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/Hestia .
-```
+| Input | Controls |
+|---|---|
+| Desktop | Click the video to play or pause. The player can fill the web page or enter browser fullscreen. |
+| Phone | Swipe up or down on the left for brightness and on the right for volume (seeking on iOS). Swipe horizontally to seek. Hold for 2× speed, double-tap either side to skip 10 seconds, or double-tap the center to play or pause. |
+| Keyboard | Space or K to play or pause. J/L skip 10 seconds, left/right arrows skip 5 seconds, up/down arrows adjust volume, and F toggles fullscreen. |
 
-### Run
+The player offers 0.5×, 1×, 1.5×, and 2× speeds and can switch to the previous or next video in the same folder.
 
-Double-click `Hestia.exe` to open the Windows console. Use the site on your phone to search, browse, and play media. Configure the service in the Windows console.
+### Optional FFmpeg and FFprobe
 
-1. Choose **Add folder**, enter a path such as `D:\Movies` or select one with **Browse**, then add it. You can add multiple libraries. Changes take effect without a restart.
-2. The service starts with Hestia. If its configured port is busy, it tries the next 20 ports. Select the address in the footer to see the current local and LAN addresses.
-3. Use the footer to stop or start the service. In **Settings**, you can change the port or start Hestia automatically when you sign in to Windows.
-4. When you close the window, choose whether to keep the service running in the tray or exit. Left-click the tray icon to restore the window. You can also exit from its context menu.
-5. Launching the executable again brings the existing console window forward.
+[FFmpeg](https://ffmpeg.org/download.html) handles transcoding, video cover frames, and embedded text subtitle extraction. FFprobe identifies media codecs and subtitle tracks. Transcoding requires an FFmpeg build with the `libx264` encoder.
 
-The Windows console contacts GitHub for the latest stable release when you select **Check for updates**. If an update is available, the install action downloads it, verifies the SHA-256 checksum, replaces the executable, and restarts Hestia. It keeps `config.json` and `data/`. The program directory must be writable, and the release must include `Hestia.exe` and SHA-256 checksums. Upgrading from v0.3.6 or an earlier version requires replacing the executable manually the first time.
+Hestia looks for both programs beside its executable, in `bin/`, in `ffmpeg/bin/`, then on the system `PATH`. Restart Hestia after installing them. **Settings** in the Windows console shows the FFmpeg status.
 
-By default, Hestia keeps `config.json` and `data/` next to the executable for easy migration and backup. The data directory contains cached thumbnails, subtitles, and cover frames, temporary transcoding segments, rotating logs, playback progress, and WebView2 browser data. You can edit the configuration file directly. Changes are picked up within about two seconds.
+## Windows console tasks
+
+- **Rescan** after adding or moving files. Hestia also scans at startup and when you add or enable a library. When a scan finds an unavailable library, its contents are hidden until you rescan after restoring the path.
+- **Generate covers** and select **Start** after a scan. Hestia reuses valid cached covers. You can hide the dialog and keep using the console. Results open when the task finishes. Expand the details to see why individual covers could not be generated. Stopping keeps the covers generated so far. Covers also load on demand while browsing, including those from very large images.
+- **Switch language** under **Settings → Language** (「设置 → 语言」 by default) for the console or through the top-bar selector for the website. Both support Simplified Chinese, English, and Japanese and save their choices separately. Simplified Chinese is the default.
+- **Check for updates** under **Settings**. Installation downloads the new EXE, verifies its SHA-256 checksum, replaces it, and restarts Hestia. Your configuration and data are kept. The program folder must be writable.
+
+## Settings, data, and access
+
+Hestia keeps `config.json` and `data/` beside the executable by default. `data/` holds playback progress, thumbnail and subtitle caches, temporary transcoding files, and logs. On Windows, it also holds the WebView2 profile. Open `data/logs/hestia.log` directly or through the Windows console.
+
+You can edit the configuration file while Hestia is running. Edits are normally read within about two seconds. After changing ports, use the new address. The example uses a Windows path. Set the path to your media directory on macOS or Linux. `autoStart` controls Windows startup at sign-in. `openBrowser` controls browser launch on macOS and Linux.
 
 ```json
 {
@@ -60,79 +83,72 @@ By default, Hestia keeps `config.json` and `data/` next to the executable for ea
 }
 ```
 
-### Language
+**Network access.** Hestia listens on `0.0.0.0` by default. Devices on the local network can browse and play media without signing in. Use a trusted LAN and keep the port off the public internet. To restrict access to this computer, set `listen` to `127.0.0.1`.
 
-Simplified Chinese, English, and Japanese are available in the same application. Simplified Chinese is the default. Choose **Settings → Language** in the Windows console to save your choice to `config.json`. The site's top-bar selector saves your choice in the current browser.
+**Removing a library and deleting files.** Removing a library in the console removes it from Hestia and keeps its files on disk. The delete action on a media detail page previews the affected files first. Confirming permanently deletes videos, images, and subtitles directly inside that folder, then renames it to `original-name-reason`. Subfolders and other files are kept. Devices on the LAN need the deletion code shown on the Hestia computer. Restarting Hestia changes the code.
 
-### Generate covers manually
+## Architecture
 
-Once the library scan finishes, select **Generate covers** in the Windows console, then select **Start**. You can hide the dialog and check progress while using the console. The results open automatically when generation finishes. Expand the details to see the file names and reasons for covers that could not be generated.
-
-Covers are generated one at a time. Hestia skips covers that already have a valid cache. You can select **Stop** at any time and reuse completed covers the next time you start. Covers still load on demand while browsing. Very large images are processed on demand to limit memory use. FFmpeg is required to extract video frames.
-
-### FFmpeg for fallback transcoding
-
-Browsers generally cannot play files encoded as HEVC (H.265), AC3, DTS, or RMVB directly. Hestia detects such files and transcodes them to HLS on demand with FFmpeg. Transcoding processes are cleaned up when playback stops.
-
-Hestia looks for FFmpeg next to the executable, in the `bin/` subdirectory, and then on the system `PATH`. Direct playback of standard formats such as H.264 in MP4 still works without FFmpeg. The Windows console shows whether FFmpeg is available.
-
-## Features
-
-| Feature | Details |
-|---|---|
-| Browsing | Top-level folders, subfolders, videos, and images are paginated on the server, 20 per page. Cards show local modification dates. Cards on the home and search pages open in a new tab. Returning home from a detail page restores the page number and cast filter. |
-| Cast | Hestia extracts cast names from video filenames in `Cast-Title` format. Search and select cast in the desktop sidebar or use the dropdown on a phone. The filtered videos are paginated. |
-| Sorting | Sort by name in natural order, modification date, or size. Choose ascending or descending order. Hestia remembers the setting. |
-| Search | Fuzzy, paginated searches of video and image filenames. Supports Chinese substrings, full pinyin and initials, English subsequences, and space-separated terms. The cast filter covers all matches, and the × button returns to all collections. |
-| Playback | Videos open in the current detail tab. Click the video to play or pause. The left fullscreen button fills the browser viewport and the right one enters browser fullscreen. Supports direct playback, HTTP Range, 0.5×, 1×, 1.5×, and 2× speeds, and navigation between videos in the same folder. |
-| Gestures | Swipe vertically on the left for brightness or on the right for volume (seeking on iOS). Press and hold for 2× speed. Double-tap left or right to skip 10 seconds or double-tap the center to play or pause. Swipe horizontally to seek. |
-| Keyboard | Space or K to play or pause, J or L to skip 10 seconds, left and right arrows to skip 5 seconds, up and down arrows to adjust volume, and F for fullscreen. |
-| Subtitles | Automatically loads matching external SRT and ASS files named after the video, with an optional language suffix. Extracts embedded SRT, ASS, and mov_text tracks on demand from the CC menu. Subtitles are converted to WebVTT and rendered by the browser. |
-| Playback progress | Resumes playback from the more recent local or server position. Continue Watching cards show progress. Playback positions sync between devices using the latest write. |
-| Transcoding | FFmpeg converts sources such as HEVC, MKV, and AC3 to H.264/AAC HLS. Reserved sessions that receive no media requests after becoming ready are reclaimed after about 25 seconds. Sessions that have served media are reclaimed after about two minutes of inactivity. Up to three sessions run concurrently. |
-| Live configuration | Add, remove, or update libraries and change ports while the service is running. Hestia scans at startup, when a library is added or enabled, and when you request a rescan. If a library becomes inaccessible, its contents are hidden and its configuration and playback progress are kept. Rescan when the path becomes available again, or remove it from the console. |
-| Administration | The Windows WebView2 console is available only on `127.0.0.1`. It controls the service and includes library paths, port, startup at sign-in, rescanning, logs, and updates. Rotating logs are kept in `data/logs/hestia.log` (three 5 MB files) and can be opened from the console. Thumbnails, subtitles, and cover frames are cached on disk. |
-
-## Directory layout
-
-```
-Configured library root
-└── Top-level folder            Home cover grid
-    └── Subfolder               May contain further subfolders
-        ├── Video (mp4/mkv/webm/avi/mov/ts/…)
-        ├── Subtitle (srt/ass)   Automatically matched to a video by name
-        └── Image (jpg/png/webp/…)  Used as a cover and paired with a video card when the names match
+```mermaid
+flowchart TB
+    Browser["Phone or desktop browser"] -->|"LAN HTTP"| Media["Media endpoint · port 8080 by default"]
+    Console["Windows console · WebView2"] -->|"Loopback HTTP"| Admin["Management endpoint · 127.0.0.1"]
+    Media --> Core["Hestia Go process"]
+    Admin --> Core
+    Core --> Files["Local videos, images, and subtitles"]
+    Core --> Data["config.json and data/"]
+    Core -->|"On demand"| Tools["FFmpeg / FFprobe"]
 ```
 
-Files directly under the library root can be found by search. Root-level videos with filenames that follow the cast convention also appear in cast-filtered results.
+1. `internal/index` scans the media directories and builds an in-memory index. Pagination, filename search, cast filters, and cover matching use that index.
+2. `internal/server` serves the media API. Direct playback reads byte ranges from the original file. Transcoding runs FFmpeg to produce temporary HLS segments, with up to three sessions at once. The player asks the server to end its session when you leave playback. The server also reclaims idle sessions.
+3. `web/` contains browsing and playback, and `web/gui/` contains the Windows console. The Go build embeds both using `go:embed`. The website uses HTML, CSS, JavaScript modules, and the bundled xgplayer and hls.js libraries.
 
-## Run from source
+## Build from source
+
+Use Go 1.27 or later. The Go dependencies are included in `vendor/`, and the Go build embeds the web assets.
+
+| Platform | Run from the repository root | Output |
+|---|---|---|
+| Windows | `.\build.bat` in PowerShell | `dist/Hestia.exe` |
+| macOS | `bash build.sh` | `dist/Hestia.app/Contents/MacOS/Hestia` |
+| Linux | `bash build.sh` | `dist/Hestia` |
+
+For development, set `HESTIA_HOME` to keep test data and configuration in a separate directory. On Windows, set it in PowerShell before running the app.
+
+```powershell
+$env:HESTIA_HOME = Join-Path (Get-Location) '.dev'
+go run -mod=vendor .
+```
+
+On macOS or Linux, set the directory in the launch command.
 
 ```bash
-HESTIA_HOME=./.dev go run .    # Keep development data and configuration in .dev
+HESTIA_HOME="$PWD/.dev" go run -mod=vendor .
 ```
 
-## Known limits
+Use `GOOS` and `GOARCH` to select the target platform when cross-compiling.
 
-- Chinese names are sorted by Unicode code point. Pinyin is supported in search.
-- ASS styling is lost when converting to WebVTT. Embedded PGS image subtitle tracks are unsupported.
-- The GUI is available on Windows. On macOS and Linux, use the terminal and edit `config.json`.
-- Thumbnail generation supports JPEG and PNG. Other image formats are served as originals. Most browsers cannot display HEIC images.
+```bash
+mkdir -p dist
+GOOS=windows GOARCH=amd64 go build -mod=vendor -trimpath -ldflags "-s -w -H windowsgui" -o dist/Hestia.exe .
+GOOS=darwin GOARCH=arm64 go build -mod=vendor -trimpath -ldflags "-s -w" -o dist/Hestia-darwin-arm64 .
+GOOS=linux GOARCH=amd64 go build -mod=vendor -trimpath -ldflags "-s -w" -o dist/Hestia-linux-amd64 .
+```
 
-## Third-party components
+Run `go test -mod=vendor ./...` for the Go tests. See also the [end-to-end playback tests](tools/player-tests/README.md).
+
+## Compatibility and third-party components
+
+- ASS styling is lost when subtitles are converted to WebVTT. Embedded PGS image subtitles are unsupported.
+- Thumbnail generation supports JPEG (including JFIF) and PNG. Other image formats are served as originals. Whether HEIC and similar formats display depends on the browser.
+- Chinese names sort by Unicode code point. Search supports pinyin.
 
 | Component | License | Purpose |
 |---|---|---|
-| [mozillazg/go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | Pinyin search |
-| [jchv/go-webview2](https://github.com/jchv/go-webview2) | MIT | Windows GUI. Windows 11 includes the WebView2 Runtime. |
-| [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | HLS playback in desktop browsers |
-| [xgplayer](https://github.com/bytedance/xgplayer) | MIT | Web player and playback controls |
-| FFmpeg / FFprobe | GPL (external executables, supplied separately as needed) | Transcoding and media probing |
+| [go-pinyin](https://github.com/mozillazg/go-pinyin) | MIT | Pinyin search |
+| [go-webview2](https://github.com/jchv/go-webview2) | MIT | Windows console |
+| [hls.js](https://github.com/video-dev/hls.js) | Apache-2.0 | Browser HLS playback |
+| [xgplayer](https://github.com/bytedance/xgplayer) | [MIT](web/assets/js/vendor/xgplayer.LICENSE.txt) | Web player |
 
-## Security
-
-The service listens on `0.0.0.0` by default, so devices on your local network can access media. From the Windows console, open the site, go to a video or image detail page, choose the option to delete media from its folder, and enter a reason. To use the same action from a phone, display the phone authorization code in the deletion dialog on the Hestia computer, then enter it on the phone to review the files that will be deleted. The code changes when Hestia restarts. Use it only on a trusted LAN.
-
-Confirming the operation stops related playback and transcoding, permanently deletes video, image, and subtitle files directly in that directory, and renames the directory to `original-name-reason`. Subfolders and other files are kept. If another program is still using a file, close it as prompted and try again.
-
-To restrict access to this computer, set `listen` to `127.0.0.1`. Keep the port off the public Internet.
+FFmpeg and FFprobe are external programs you install separately. Their licenses depend on the build options. See the [FFmpeg license notes](https://ffmpeg.org/legal.html).
